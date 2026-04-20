@@ -1,0 +1,25 @@
+{
+  "name": "ctrlnode-bridge",
+  "version": "2.0.0",
+  "description": "CtrlNode Bridge — connects your local OpenClaw instance to CtrlNode SaaS",
+  "main": "src/bridge/index.ts",
+  "scripts": {
+    "start": "bun run src/bridge/index.ts",
+    "dev": "bun run --watch src/bridge/index.ts",
+    "build:linux": "bun build ./src/bridge/index.ts --compile --target=bun-linux-x64 --outfile=dist/ctrlnode-bridge-linux-x64",
+    "build:linux-baseline": "bun build ./src/bridge/index.ts --compile --target=bun-linux-x64-baseline --outfile=dist/ctrlnode-bridge-linux-x64-baseline",
+    "build:mac": "bun build ./src/bridge/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/ctrlnode-bridge-darwin-arm64",
+    "build:win": "bun build ./src/bridge/index.ts --compile --target=bun-windows-x64 --outfile=dist/ctrlnode-bridge.exe",
+    "build:all": "bun run build:linux && bun run build:linux-baseline && bun run build:mac && bun run build:win",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^6.0.2"
+  }
+}
