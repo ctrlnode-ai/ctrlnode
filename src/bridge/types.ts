@@ -100,6 +100,8 @@ export interface BridgeMessage {
   contextTaskId?: string;
   /** When true, operations target the ctrlnode root instead of the agent workspace. */
   useCtrlnode?: boolean;
+  /** When `base64`, `content` is decoded to bytes before writing; otherwise UTF-8 text. */
+  contentEncoding?: 'utf8' | 'base64';
   /** Folder name or path for single-folder operations such as create_workspace or delete_agent_folders. */
   folderName?: string;
   /** Initial files to write when creating a new workspace. */
