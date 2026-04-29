@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.exe
+*-linux-x64
+*-linux-x64-baseline
+*-darwin-arm64
+.env
+*.log
+bun.lock
+.DS_Store
