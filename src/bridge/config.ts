@@ -1,6 +1,6 @@
 /**
  * @file config.ts
- * @description Runtime configuration for the Mission Control Agent Bridge.
+ * @description Runtime configuration for the CtrlNode.ai Agent Bridge.
  */
 
 import path from 'path';
@@ -28,7 +28,7 @@ export const HEARTBEAT_MS = parseInt(process.env.HEARTBEAT_MS || '30000', 10);
 export const RECONNECT_MS = parseInt(process.env.RECONNECT_MS || '5000', 10);
 export const CONNECTION_TIMEOUT_MS = parseInt(process.env.CONNECTION_TIMEOUT_MS || '10000', 10);
 export const AGENT_IDLE_RESET_MS = parseInt(process.env.AGENT_IDLE_RESET_MS || '15000', 10);
-export const SESSION_HISTORY_POLL_MS = parseInt(process.env.SESSION_HISTORY_POLL_MS || '15000', 10);
+export const SESSION_HISTORY_POLL_MS = parseInt(process.env.SESSION_HISTORY_POLL_MS || '5000', 10);
 
 // ── File watcher ──────────────────────────────────────────────────────────────
 

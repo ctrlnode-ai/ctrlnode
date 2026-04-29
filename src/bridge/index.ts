@@ -1,6 +1,6 @@
 /**
  * @file index.ts
- * @description Entry point for the Mission Control Agent Bridge.
+ * @description Entry point for the CtrlNode.ai Agent Bridge.
  *
  * Bootstraps the bridge in three steps:
  *  1. Import config.ts — resolves all environment variables and validates
@@ -24,7 +24,7 @@ import { logger } from './logger';
 
 // ── Startup banner ────────────────────────────────────────────────────────────
 
-logger.info('startup', { banner: 'Mission Control — Agent Bridge v1.0', builtAt: '__BUILD_TIME__' });
+logger.info('startup', { banner: 'CtrlNode.ai — Agent Bridge v1.0', builtAt: '__BUILD_TIME__' });
 
 // ── Keepalive ─────────────────────────────────────────────────────────────────
 

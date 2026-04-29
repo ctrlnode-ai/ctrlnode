@@ -1,6 +1,6 @@
 /**
  * @file types.ts
- * @description Shared TypeScript interfaces and types for the Mission Control Agent Bridge.
+ * @description Shared TypeScript interfaces and types for the CtrlNode.ai Agent Bridge.
  *
  * All data structures that flow between modules (agent info, file results,
  * WebSocket messages) are defined here to provide a single source of truth
@@ -20,7 +20,7 @@ export interface AgentInfo {
   name: string;
   /** AI model identifier (e.g. "claude-3-5-sonnet"). Defaults to "default". */
   model: string;
-  /** Optional role label shown in the Mission Control UI. */
+  /** Optional role label shown in the CtrlNode.ai UI. */
   role?: string;
   /** Optional emoji shown next to the agent name in the UI. */
   emoji?: string;
@@ -100,6 +100,8 @@ export interface BridgeMessage {
   contextTaskId?: string;
   /** When true, operations target the ctrlnode root instead of the agent workspace. */
   useCtrlnode?: boolean;
+  /** When `base64`, `content` is decoded to bytes before writing; otherwise UTF-8 text. */
+  contentEncoding?: 'utf8' | 'base64';
   /** Folder name or path for single-folder operations such as create_workspace or delete_agent_folders. */
   folderName?: string;
   /** Initial files to write when creating a new workspace. */

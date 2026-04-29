@@ -20,7 +20,7 @@ import { resolveTargetAgentId } from './agentRouting';
 const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep']);
 
 export function handleWriteFile(msg: BridgeMessage, ctx: HandlerContext): void {
-  const { path: relPath, content, useCtrlnode } = msg;
+  const { path: relPath, content, useCtrlnode, contentEncoding } = msg;
   const targetId = resolveTargetAgentId(msg.agentId);
   const agentInfo = discoveredAgents[targetId!];
 
@@ -40,17 +40,26 @@ export function handleWriteFile(msg: BridgeMessage, ctx: HandlerContext): void {
     suppressFileChangedForAgentPaths(targetId, [normalizedSafePath], 3000);
   }
 
-  // Strip status tags from output files before persisting to disk.
-  // Detection is done via session JSONL polling — keeping tags in output files
-  // only causes false-positive completions when successors read them as input.
+  // Strip status tags from output files before persisting to disk (text only).
   const isTaskOutput = safePath.includes('/output/') || safePath.includes('\\output\\');
-  const contentToWrite = (isTaskOutput && content)
-    ? content.replace(/<TASK_(?:COMPLETED|FAILED|BLOCKED):[a-f0-9-]+>/gi, '').trimEnd() + '\n'
-    : (content || '');
-  fs.writeFileSync(fullPath, contentToWrite, 'utf8');
+  let payload: string | Buffer;
+  if (contentEncoding === 'base64' && content) {
+    payload = Buffer.from(content, 'base64');
+  } else {
+    const text = (isTaskOutput && content)
+      ? content.replace(/<TASK_(?:COMPLETED|FAILED|BLOCKED):[a-f0-9-]+>/gi, '').trimEnd() + '\n'
+      : (content || '');
+    payload = text;
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    fs.writeFileSync(fullPath, payload);
+  } else {
+    fs.writeFileSync(fullPath, payload, 'utf8');
+  }
   logger.info('write_file', { agentId: useCtrlnode ? 'CTRLNODE' : targetId, path: safePath });
   if (isTaskOutput) {
-    const preview = contentToWrite.slice(-600);
+    const preview = typeof payload === 'string' ? payload.slice(-600) : '(binary)';
     logger.info('subagent.write_output', {
       agentId: targetId,
       path: safePath,
