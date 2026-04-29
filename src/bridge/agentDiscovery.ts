@@ -92,9 +92,27 @@ function discoverAgents(config: any): Record<string, AgentInfo> {
     if (!normalizedId || normalizedId === 'main') continue;
 
         const rawWorkspace = a.workspace || config?.agents?.defaults?.workspace || '/root/.openclaw/workspace';
-        const workspace = path.isAbsolute(rawWorkspace)
-          ? rawWorkspace
-          : path.resolve(path.dirname(OPENCLAW_CONFIG), rawWorkspace);
+
+        // Resolve relative workspace paths against the directory that contains openclaw.json.
+        let resolvedWorkspace: string;
+        if (path.isAbsolute(rawWorkspace)) {
+          resolvedWorkspace = rawWorkspace;
+        } else {
+          const configDir = path.dirname(OPENCLAW_CONFIG);
+          const configDirBasename = path.basename(configDir); // e.g. ".openclaw"
+
+          // If the relative path starts with the config dir basename (like ".openclaw/"),
+          // strip it to prevent double-nesting when we resolve against configDir.
+          let stripped = rawWorkspace;
+          if (configDirBasename && rawWorkspace.startsWith(configDirBasename + '/')) {
+            stripped = rawWorkspace.slice(configDirBasename.length + 1);
+          } else if (configDirBasename && rawWorkspace.startsWith('./' + configDirBasename + '/')) {
+            stripped = rawWorkspace.slice(configDirBasename.length + 3);
+          }
+
+          resolvedWorkspace = path.resolve(configDir, stripped);
+        }
+        const workspace = resolvedWorkspace;
 
         const info: AgentInfo = { workspace, name: a.name || normalizedId, model: a.model || 'default' };
         if (a.role)        info.role        = a.role;
@@ -125,8 +143,8 @@ export function buildAgentSummaries(): AgentSummary[] {
 }
 
 /**
- * Returns true if the given agent's workspace resides inside the Mission Control
- * ctrlnode directory (i.e. it is a Mission Control-managed agent).
+ * Returns true if the given agent's workspace resides inside the CtrlNode.ai
+ * ctrlnode directory (i.e. it is a CtrlNode.ai-managed agent).
  *
  * @param agentId - The agent ID to check.
  * @returns True when the agent workspace is under the ctrlnode path.

@@ -66,65 +66,70 @@ Install the Bridge, pair it with your workspace, and your agents appear in the w
 
 ---
 
+## Prerequisites — OpenClaw gateway config
+
+The Bridge communicates with OpenClaw via its local gateway. Before running the Bridge, make sure your OpenClaw config includes the required bindings and tool permissions:
+
+```bash
+grep -A10 '"gateway"' ~/.openclaw/openclaw.json
+```
+
+The `gateway` block must look like this:
+
+```json
+"gateway": {
+  "bind": "lan",
+  "tools": {
+    "allow": ["sessions_spawn", "sessions_send", "sessions_list"]
+  }
+}
+```
+
+If the block is missing or incomplete, edit `~/.openclaw/openclaw.json` and add it, then restart the OpenClaw gateway.
+
+---
+
 ## Get started in 3 steps
 
 ### 1 — Sign up
 
-Create an account at [ctrlnode.ai](https://ctrlnode.ai). You'll get a **Pairing Token** from Settings → Bridge.
+Create an account at [ctrlnode.ai](https://ctrlnode.ai). You'll get a **Pairing Token** from **Settings → Bridge**.
 
 ---
 
-### 2 — Install the Bridge
+### 2 — Install & pair
 
-**Linux / macOS** — one-liner installer (detects platform and CPU automatically):
+Run the one-liner for your platform. The installer downloads the right binary, adds it to PATH, then **asks for your two tokens** and prints the exact command to run.
+
+**Linux / macOS**
+```bash
+curl -fsSL https://github.com/ctrlnode-ai/ctrlnode/releases/download/v2026.1.1/install.sh | sh
+```
+
+**Windows (PowerShell)**
+```powershell
+irm https://github.com/ctrlnode-ai/ctrlnode/releases/download/v2026.1.1/install.ps1 | iex
+```
+
+The installer will prompt for:
+- **Pairing Token** — from [ctrlnode.ai](https://ctrlnode.ai) → Settings → Bridge
+- **OpenClaw Gateway Token** — from `~/.openclaw/openclaw.json` → `gateway.auth.token`
+
+At the end it prints the exact `ctrlnode-bridge` command with your tokens already filled in.
+
+Example (Linux) — what the installer prints:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
+PAIRING_TOKEN="<your_pairing_token>" OPENCLAW_GATEWAY_TOKEN="<your_gateway_token>" ctrlnode-bridge
 ```
-
-**Windows (PowerShell)**:
-
-```powershell
-irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1 | iex
-```
-
-This downloads the right binary for your platform and installs it to `/usr/local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\Programs\ctrlnode` (Windows, added to PATH automatically).
-
-<details>
-<summary>Manual download (no curl)</summary>
-
-| Platform | Binary |
-|---|---|
-| Linux (modern CPUs, AVX2) | `ctrlnode-bridge-linux-x64` |
-| Linux (older CPUs, AVX only) | `ctrlnode-bridge-linux-x64-baseline` |
-| macOS (Apple Silicon) | `ctrlnode-bridge-darwin-arm64` |
-| Windows | `ctrlnode-bridge.exe` |
-
-→ [Download from Releases](https://github.com/ctrlnode-ai/ctrlnode/releases)
-
-Not sure which Linux binary? `grep flags /proc/cpuinfo | head -1 | grep -o "avx[^ ]*"` — `avx2` → standard, anything else → `-baseline`.
-
-</details>
 
 ---
 
 ### 3 — Run it
 
-**Linux / macOS**
-```bash
-PAIRING_TOKEN=your_pairing_token \
-OPENCLAW_GATEWAY_TOKEN=your_gateway_token \
-./ctrlnode-bridge-linux-x64
-```
+Copy and run the command printed by the installer. Your agents appear in the CTRL NODE web UI within seconds — create your first task or pipeline and watch it run.
 
-**Windows (PowerShell)**
-```powershell
-$env:PAIRING_TOKEN = "your_pairing_token"
-$env:OPENCLAW_GATEWAY_TOKEN = "your_gateway_token"
-.\ctrlnode-bridge.exe
-```
-
-Open the CTRL NODE web UI — your agents appear automatically. Create your first task or pipeline and watch it run.
+> Need more control? See [Advanced install →](doc/setup/advanced-install.md)
 
 ---
 
@@ -142,15 +147,17 @@ Open the CTRL NODE web UI — your agents appear automatically. Create your firs
 
 | Component | Path | Status |
 |---|---|---|
-| **Bridge** | [`src/bridge/`](src/bridge/) | ✅ Open source |
-| **Marketing site** (Astro) | [`../CtrlNode.Public/`](../CtrlNode.Public/) — `npm run dev` → [http://localhost:4321/](http://localhost:4321/) | Same copy and live demos as [ctrlnode.ai](https://ctrlnode.ai) |
+| **Bridge** | [`src/`](src/) | ✅ Open source |
+| **Installer scripts** | [`install.ps1`](install.ps1) · [`install.sh`](install.sh) | ✅ Open source |
+| **Releases** | [`Releases/`](Releases/) | Pre-built binaries per version |
 
-The Bridge is the client-side connector. See [src/bridge/README.md](src/bridge/README.md) for environment variables and build instructions.
+The Bridge is the client-side connector that pairs your OpenClaw workers with the CTRL NODE control plane. See [doc/setup/advanced-install.md](doc/setup/advanced-install.md) for manual install, environment variables, and build instructions.
 
 ---
 
 ## Setup guides
 
+- [doc/setup/advanced-install.md](doc/setup/advanced-install.md) — Manual install for all platforms + binary selection guide
 - [doc/setup/docker.md](doc/setup/docker.md) — Bridge inside a Docker container alongside OpenClaw
 - [doc/setup/linux.md](doc/setup/linux.md) — Linux server, no Docker (systemd service)
 - [doc/setup/mac.md](doc/setup/mac.md) — macOS native (launchd service)

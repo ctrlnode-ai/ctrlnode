@@ -1,6 +1,6 @@
 /**
  * @file types.ts
- * @description Shared TypeScript interfaces and types for the Mission Control Agent Bridge.
+ * @description Shared TypeScript interfaces and types for the CtrlNode.ai Agent Bridge.
  *
  * All data structures that flow between modules (agent info, file results,
  * WebSocket messages) are defined here to provide a single source of truth
@@ -20,7 +20,7 @@ export interface AgentInfo {
   name: string;
   /** AI model identifier (e.g. "claude-3-5-sonnet"). Defaults to "default". */
   model: string;
-  /** Optional role label shown in the Mission Control UI. */
+  /** Optional role label shown in the CtrlNode.ai UI. */
   role?: string;
   /** Optional emoji shown next to the agent name in the UI. */
   emoji?: string;

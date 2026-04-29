@@ -1,6 +1,6 @@
 /**
  * @file fileSystem.ts
- * @description Filesystem utility functions for the Mission Control Agent Bridge.
+ * @description Filesystem utility functions for the CtrlNode.ai Agent Bridge.
  *
  * Provides pure, side-effect-minimal helpers for:
  *  - Reading and writing files safely (no uncaught exceptions)

@@ -36,7 +36,7 @@ $r.assets | ForEach-Object { "$($_.name) -> $($_.browser_download_url)" }
 ### Download bridge binary
 ```powershell
 Invoke-WebRequest "https://github.com/ctrlnode-ai/ctrlnode/releases/download/v2026.1.1/ctrlnode-bridge.exe" `
-  -OutFile "C:\CODE\2026\CtrlNode\temp\ctrlnode-bridge.exe" -UseBasicParsing
+  -OutFile "C:\temp\ctrlnode-bridge.exe" -UseBasicParsing
 ```
 → 115,629,568 bytes
 
@@ -49,8 +49,8 @@ Via UI at `http://localhost:5173/system/bridge-tokens` → name `local-dev`
 $env:PAIRING_TOKEN = "14056d58f5feb49af4d0e7663c9a5470474e706df86e1d41733ca33ca5aaafc8"
 $env:OPENCLAW_GATEWAY_URL = "http://localhost:18789"
 $env:OPENCLAW_GATEWAY_TOKEN = "1bf846e83ca23e97e9a7b5edba22ff946c01a3b80587e2547248834ac815036d"
-$env:SAAS_URL = "ws://localhost:8080/ws/bridge"
-C:\CODE\2026\CtrlNode\temp\ctrlnode-bridge.exe
+$env:SAAS_URL = "ws://http://api.ctrlnode.ai/ws/bridge"
+C:\temp\ctrlnode-bridge.exe
 ```
 
 ### Result
@@ -66,6 +66,6 @@ UI showed: **BRIDGE ONLINE · Connected to server. Active agents: 1**
 ## Notes
 
 - `OPENCLAW_GATEWAY_URL` defaults to `http://localhost:18789` — no need to set it explicitly when running locally
-- The bridge asked for OpenClaw directory on first run → pressed Enter to use default (`C:\Users\VIL\.openclaw`)
+- The bridge asked for OpenClaw directory on first run → pressed Enter to use default (`C:\temp\.openclaw`)
 - The local `openclaw.json` had a `firstbot` agent with a missing workspace dir → warning `workspace_missing` (non-fatal)
 - Token `local-dev` is now active in the DB

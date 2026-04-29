@@ -12,12 +12,75 @@ import {
   startMainSessionPolling,
   stopMainSessionPolling,
 } from './sessionHistoryPoller';
+import { setAgentRunning } from './websocket';
+import { setTaskSubagentSession } from './subagentSessions';
+
+type TaskTerminalStatus = 'failed' | 'blocked';
+
+function sendTaskTerminalToSaas(
+  ctx: HandlerContext,
+  agentId: string,
+  taskId: string | undefined,
+  status: TaskTerminalStatus,
+  reason: string,
+  source: string
+): void {
+  if (!taskId) return;
+
+  const normalizedReason = reason?.trim() || 'INVOKE_ERROR';
+
+  logger.warn('intent.task_terminal_propagated', {
+    agentId,
+    taskId,
+    status,
+    source,
+    reason: normalizedReason,
+  });
+
+  ctx.sendToSaas({
+    action: 'task_complete',
+    agentId,
+    taskId,
+    status,
+    reason: normalizedReason,
+    source,
+  });
+}
+
+function sendTaskFailureToSaas(
+  ctx: HandlerContext,
+  agentId: string,
+  taskId: string | undefined,
+  reason: string,
+  source: string
+): void {
+  sendTaskTerminalToSaas(ctx, agentId, taskId, 'failed', reason, source);
+}
+
+function sendTaskBlockedToSaas(
+  ctx: HandlerContext,
+  agentId: string,
+  taskId: string | undefined,
+  reason: string,
+  source: string
+): void {
+  sendTaskTerminalToSaas(ctx, agentId, taskId, 'blocked', reason, source);
+}
+
+function classifyTaskTerminalStatus(responseStatus: number, responseText: string): TaskTerminalStatus {
+  if (responseStatus === 401 || /unauthorized/i.test(responseText)) {
+    return 'blocked';
+  }
+
+  return 'failed';
+}
 
 /**
  * Main entry point for action-based intents from SaaS.
  */
 export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext, intentType: string): Promise<void> {
-  const { requestId, args, content, executionId, contextTaskId } = msg;
+  const contextTaskId = msg.contextTaskId ?? msg.taskId;
+  const { requestId, args, content, executionId } = msg;
   const providerMethod = getIntentProviderMethod(intentType);
   const targetId = resolveTargetAgentId(msg.agentId);
   const agentInfo = discoveredAgents[targetId!];
@@ -59,7 +122,8 @@ export async function handleInvokeTool(
   ctx: HandlerContext,
   metadata?: { intentType?: string; providerMethod?: string }
 ): Promise<void> {
-  const { requestId, executionId, contextTaskId, args, content } = msg;
+  const contextTaskId = msg.contextTaskId ?? msg.taskId;
+  const { requestId, executionId, args, content } = msg;
   const targetId = resolveTargetAgentId(msg.agentId);
   const agentInfo = discoveredAgents[targetId!];
 
@@ -84,8 +148,16 @@ export async function handleInvokeTool(
 
   // 2. Intent-to-Tool mapping translation
   if (intentType === 'init_ping') {
-    toolName = 'ping';
-    toolArgs = {};
+    // Use sessions_send (not ping) so OpenClaw loads pi-embedded and registers the
+    // built-in legacy context engine. A plain /ping call does NOT load the session
+    // machinery, leaving the context engine registry empty and causing
+    // "Context engine 'legacy' is not registered" on the first sessions_spawn.
+    toolName = 'sessions_send';
+    // Keep message/sessionKey from args so the NO_REPLY pattern works.
+    // If no sessionKey was provided, default to the agent's main session.
+    if (!toolArgs?.sessionKey) {
+      toolArgs = { ...toolArgs, sessionKey: 'main' };
+    }
   } else if (intentType === 'create_session' || toolName === 'sessions_spawn') {
     toolName = 'sessions_spawn';
   } else if (intentType === 'agent_command' || intentType === 'dispatch_task' || intentType === 'followup') {
@@ -240,6 +312,12 @@ export async function handleInvokeTool(
         if (!spawnResponse.ok) {
           const err = `HTTP_${spawnResponse.status}: ${spawnText.slice(0, 512)}`;
           logger.error('intent.spawn_fallback_error', { agentId: targetId, tool: 'sessions_spawn', status: spawnResponse.status, body: spawnText.slice(0, 512) });
+          const terminalStatus = classifyTaskTerminalStatus(spawnResponse.status, spawnText);
+          if (terminalStatus === 'blocked') {
+            sendTaskBlockedToSaas(ctx, targetId!, contextTaskId, err, 'intent_response_error');
+          } else {
+            sendTaskFailureToSaas(ctx, targetId!, contextTaskId, err, 'intent_response_error');
+          }
           ctx.sendToSaas({ action: intentType ? 'intent_result' : 'tool_result', requestId, agentId: targetId, intentType, tool: 'sessions_spawn', providerMethod, executionId, contextTaskId, error: err });
           return;
         }
@@ -260,20 +338,12 @@ export async function handleInvokeTool(
         contextTaskId 
       });
 
-      // If a task-related intent fails at the tool level (e.g. tool not available or 404),
-      // we inject a <TASK_BLOCKED:id> tag so the SaaS can block the task automatically.
-      if (contextTaskId && (intentType === 'dispatch_task' || intentType === 'agent_command')) {
-        const blockTag = `<TASK_BLOCKED:${contextTaskId}>`;
-        const blockReason = `Tool invocation failed (${toolName}): ${text.slice(0, 100)}`;
-        ctx.sendToSaas({
-          action: 'agent_message',
-          agentId: targetId,
-          taskId: contextTaskId,
-          message: `${blockTag}\n\n⚠️ ${blockReason}`
-        });
-        logger.warn('intent.auto_block_injected', { agentId: targetId, taskId: contextTaskId, tool: toolName });
+      const terminalStatus = classifyTaskTerminalStatus(response.status, text);
+      if (terminalStatus === 'blocked') {
+        sendTaskBlockedToSaas(ctx, targetId!, contextTaskId, err, 'intent_response_error');
+      } else {
+        sendTaskFailureToSaas(ctx, targetId!, contextTaskId, err, 'intent_response_error');
       }
-
       ctx.sendToSaas({ action: intentType ? 'intent_result' : 'tool_result', requestId, agentId: targetId, intentType, tool: toolName, providerMethod, executionId, contextTaskId, error: err });
       return;
     }
@@ -281,13 +351,43 @@ export async function handleInvokeTool(
     const toolResult = JSON.parse(text);
     const resultText = toolResult.result?.content?.[0]?.text || text;
 
+    const spawnDetails = toolResult.result?.details as
+      | { status?: string; error?: string; childSessionKey?: string }
+      | undefined;
+    /** OpenClaw often returns HTTP 200 with ok:true while details.status is "error" (e.g. context engine missing). */
+    const sessionsSpawnFailed =
+      intentType === 'dispatch_task' &&
+      toolName === 'sessions_spawn' &&
+      spawnDetails?.status === 'error';
+
+    if (sessionsSpawnFailed) {
+      const reason = spawnDetails?.error?.trim() || 'sessions_spawn reported status error';
+      sendTaskBlockedToSaas(ctx, targetId!, contextTaskId, reason, 'sessions_spawn_openclaw_error');
+    }
+
+    // Capture child session key produced by sessions_spawn so we can deterministically
+    // resolve subagent sessions later without guessing by most-recent entry.
+    if (!sessionsSpawnFailed) {
+      try {
+        const childKey = toolResult.result?.details?.childSessionKey;
+        const taskIdForSession = contextTaskId || (typeof toolArgs?.message === 'string' ? (toolArgs.message.match(/TASK_(?:COMPLETED|FAILED|BLOCKED):([0-9a-f-]{36})/)?.[1]) : undefined) || undefined;
+        if (intentType === 'dispatch_task' && toolName === 'sessions_spawn') {
+          if (childKey && taskIdForSession) {
+            setTaskSubagentSession(taskIdForSession, childKey);
+          }
+        }
+      } catch (e) {
+        logger.warn('dispatch_task.spawn_result_handling_failed', { agentId: targetId, error: String(e) });
+      }
+    }
+
     // Helper: extract a task result tag UUID from any text (handles markdown table cells, raw tags, yield messages)
     const extractTaskId = (src: string): string | undefined =>
       src?.match(/TASK_(?:COMPLETED|FAILED|BLOCKED):([0-9a-f-]{36})/)?.[1];
 
     // For dispatch_task (sessions_spawn), start polling the main session log for
     // completion tags and inactivity timeout.
-    if (intentType === 'dispatch_task' && toolName === 'sessions_spawn') {
+    if (!sessionsSpawnFailed && intentType === 'dispatch_task' && toolName === 'sessions_spawn') {
       const taskIdForSession = contextTaskId || extractTaskId(toolArgs?.message || '');
       if (taskIdForSession) {
         // taskFolderName arrives as a top-level field in toolArgs (e.g. "tasks/06f4feac-makehi").
@@ -298,22 +398,14 @@ export async function handleInvokeTool(
         const sessionWorkspace = isAgentInCtrlnode(targetId!)
           ? ctrlnodePath
           : agentInfo.workspace;
-        startMainSessionPolling(targetId!, taskIdForSession, folderForLog, sessionWorkspace, ctx.sendToSaas.bind(ctx));
-        logger.info('dispatch_task.main_session_polling_started', { agentId: targetId, taskId: taskIdForSession, taskFolderName: folderForLog });
+        
+        logger.info('dispatch_task.starting_poller', { taskId: taskIdForSession, folderForLog, sessionWorkspace });
+        startMainSessionPolling(targetId!, taskIdForSession, folderForLog, sessionWorkspace, ctx.sendToSaas.bind(ctx), setAgentRunning);
       }
     }
 
-    // Log the model's reply to console so it's visible in Bridge logs
     const modelReply = toolResult.result?.details?.reply || toolResult.result?.content?.[0]?.text;
     if (modelReply) {
-      logger.info('model.reply', {
-        agentId: targetId,
-        tool: toolName,
-        taskId: contextTaskId,
-        reply: modelReply
-      });
-
-      // When task ends (status tag or "task completed" keyword), stop main session polling.
       const doneTaskId = contextTaskId || extractTaskId(modelReply);
       const hasStatusTag = /TASK_COMPLETED|TASK_FAILED|TASK_BLOCKED/.test(modelReply);
       const hasCompletedKeyword = !!(contextTaskId && /task.{0,30}completed|completed.{0,30}task/i.test(modelReply));
@@ -322,9 +414,7 @@ export async function handleInvokeTool(
         stopMainSessionPolling(doneTaskId);
       }
 
-      // Keyword-based completion: agent says "task completed" in chat → notify SaaS
       if (hasCompletedKeyword) {
-        logger.info('dispatch_task.keyword_completion_detected', { agentId: targetId, taskId: contextTaskId });
         ctx.sendToSaas({ action: 'task_complete', agentId: targetId, taskId: contextTaskId, source: 'keyword_detection' });
       }
     }
@@ -359,6 +449,7 @@ export async function handleInvokeTool(
     });
   } catch (err: any) {
     logger.error(intentType ? 'intent.exception' : 'tool.exception', { agentId: targetId, tool: toolName, error: err?.message, executionId, contextTaskId });
+    sendTaskFailureToSaas(ctx, targetId!, contextTaskId, err?.message || 'INVOKE_ERROR', 'intent_exception');
     ctx.sendToSaas({ action: intentType ? 'intent_result' : 'tool_result', requestId, agentId: targetId, intentType, tool: toolName, providerMethod, executionId, contextTaskId, error: err?.message || 'INVOKE_ERROR' });
   }
 }

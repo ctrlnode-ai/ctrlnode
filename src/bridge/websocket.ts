@@ -3,7 +3,7 @@
  * @description WebSocket connection lifecycle management for the Agent Bridge.
  *
  * Responsibilities:
- *  - Establish and maintain the WebSocket connection to the Mission Control SaaS.
+ *  - Establish and maintain the WebSocket connection to the CtrlNode.ai SaaS.
  *  - Perform the initial handshake (send agent list + version).
  *  - Detect and handle authentication failures (exit without retry).
  *  - Queue outgoing messages while disconnected and flush them on reconnect.
@@ -183,7 +183,11 @@ export function runSyncAgents(): void {
       stopWatcher(id);
     },
     onChanged() {
-      sendToSaas({ action: 'agent_update', agents: buildAgentSummaries() });
+      sendToSaas({
+        action: 'agent_update',
+        version: BRIDGE_VERSION,
+        agents: buildAgentSummaries(),
+      });
       sendHeartbeat();
     },
   });
