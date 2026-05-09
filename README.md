@@ -183,9 +183,7 @@ See the per-provider guides in [`doc/`](doc/) for full setup instructions.
 | **Provider guides** | [`doc/`](doc/) |
 | **Release notes** | [`Releases/`](Releases/) |
 
-The Bridge source is in [`src/`](src/). See the [per-provider guides](doc/providers/) for environment variables and the [setup guides](doc/setup/) for deployment options.
-
----
+The Bridge source is in [`src/`](src/). See the [per-provider guides](doc/providers/) for environment variables and the [setup guides](doc/setup/) for deployment option
 
 ## Provider guides
 
