@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 # CtrlNode Bridge — installer
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/Releases/v2026.2.0/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
 #
 # Custom install directory:
-#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/Releases/v2026.2.0/install.sh | sh -s -- --dir ~/.local/bin
+#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh -s -- --dir ~/.local/bin
 
 set -e
 
