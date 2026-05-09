@@ -6,12 +6,11 @@
   <img alt="CTRL NODE" src="assets/logo-dark.png" width="420">
 </picture>
 
-### Visual orchestration for OpenClaw — pipelines and Kanban on your infrastructure.
+### Launch tasks on Claude, Copilot, Gemini, Codex, Cursor or OpenClaw — remotely, from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
 [![Releases](https://img.shields.io/github/v/release/ctrlnode-ai/ctrlnode?style=flat-square&label=release)](https://github.com/ctrlnode-ai/ctrlnode/releases)
 [![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMEExMCAxMCAwIDAgMCAxMiAyeiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://ctrlnode.ai)
-[![OpenClaw](https://img.shields.io/badge/works_with-OpenClaw-orange?style=flat-square)](https://github.com/openclaw/openclaw)
 
 [Website](https://ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases) · [Bridge setup](src/bridge/README.md)
 
@@ -19,50 +18,77 @@
 
 ---
 
-**CTRL NODE** runs your OpenClaw fleet from one place: **pipelines or Kanban.** Ship work from **BACKLOG** to **DONE** — your data stays local with the Bridge; the Bridge and tooling are open source.
+**CTRL NODE** lets you **launch tasks on AI coding agents running on your own machine or VPS — from anywhere, through a web UI**.
 
-Launch AI tasks on OpenClaw as **pipelines** (n8n-style graphs) or on a **Kanban board**. Assign tasks, orchestrate multi-step flows, watch agent output live. Workspaces and task files **never leave your servers**.
+Write a task. Pick an agent. Hit run. The task lands on your machine — Claude edits your files, Copilot writes code, Gemini runs scripts — while you watch the output stream live from your browser, no matter where you are in the world.
 
----
+Install the tiny Bridge binary on the machine where your agents live. It opens one outbound connection to CTRL NODE — no port-forwarding, no VPN, no firewall rules. Then from [app.ctrlnode.ai](https://app.ctrlnode.ai) you can launch tasks, chain them into pipelines, and track every run remotely.
 
-## Pipelines — n8n-style visual pipelines
-
-Design your automations on an infinite canvas: drop agent nodes, wire their inputs and outputs, and chain OpenClaw tasks so the result of one step becomes the context of the next. When the graph is ready, hit **Deploy Pipeline** and watch every stage execute live.
-
-Drag & drop nodes · branching & fan-out · one-click deploy · live run stream.
-
-Below: the **Pipelines** section from the public site (`/#pipelines`) — same live preview as [ctrlnode.ai](https://ctrlnode.ai).
-
-![Pipelines section from the CTRL NODE marketing site — #pipelines](assets/pipelines.png)
+Supports **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combination. Your files and workspaces **never leave your machine** — CTRL NODE only sees the output you stream.
 
 ---
 
-## Kanban — ship tasks like a product team
+## Supported providers
 
-Not every job needs a DAG. Write a task, pick an agent, and drop it on the board. CTRL NODE promotes work through **BACKLOG → INBOX → ACTIVE → DONE** as the Bridge dispatches it to your OpenClaw workers and they report back in real time.
+The Bridge connects to any of the following agent backends — called **providers** — in the same process:
 
-Below: the **Kanban** section from the public site (`/#kanban`).
+| Provider | Description | Guide |
+|---|---|---|
+| **Claude** (`claude-sdk`) | Anthropic Claude via `@anthropic-ai/claude-agent-sdk` or the `claude` CLI | [doc/claude-sdk.md](doc/claude-sdk.md) |
+| **Copilot** (`copilot`) | GitHub Copilot via the ACP protocol | [doc/copilot.md](doc/copilot.md) |
+| **Gemini** (`gemini`) | Google Gemini CLI via the ACP protocol | [doc/gemini.md](doc/gemini.md) |
+| **Codex** (`codex`) | OpenAI Codex via `@openai/codex-sdk` | [doc/codex.md](doc/codex.md) |
+| **Cursor** (`cursor`) | Cursor via `@cursor/sdk` | [doc/cursor.md](doc/cursor.md) |
+| **OpenClaw** (`openclaw`) | OpenClaw agent runtime (HTTP gateway) | [doc/openclaw.md](doc/openclaw.md) |
 
-![Kanban section from the CTRL NODE marketing site — #kanban](assets/kanban.png)
+You can run multiple providers in parallel from one Bridge process by listing them in `PROVIDERS`:
+
+```env
+PROVIDERS=claude-sdk,copilot,cursor
+```
 
 ---
 
 ## How it works
 
 ```
-Your machine / VPS
-  ├── OpenClaw runtime         (AI agent executor)
-  └── Agent workspaces         (task files, outputs)
+  You — anywhere on the internet
+  (browser, laptop, phone)
           │
-          │  CTRL NODE Bridge   ← lightweight client you run (open source)
+          │  https://app.ctrlnode.ai
           ▼
-    CTRL NODE control plane    ← hosted UI & coordination
+    CTRL NODE control plane    ← hosted UI & orchestration
       ├── Task management UI
       ├── Pipeline orchestrator
       └── Team collaboration
+          │
+          │  WebSocket (outbound from Bridge — no open ports needed)
+          ▼
+    Your machine / VPS
+      ├── CTRL NODE Bridge   ← lightweight client you run (open source)
+      ├── Claude / Copilot / Gemini / Codex / Cursor / OpenClaw
+      └── Agent workspaces (task files, outputs — stay local)
 ```
 
-Install the Bridge, pair it with your workspace, and your agents appear in the web UI within seconds.
+The Bridge makes a single **outbound** WebSocket connection to CTRL NODE.  No inbound ports, no VPN, no firewall changes — it works behind NAT, inside Docker, on a headless VPS.  From the web UI you can dispatch tasks, design pipelines, and read live agent output as if you were sitting in front of the machine.
+
+---
+
+## Pipelines — chain tasks across agents
+
+Need more than one task? Design a pipeline: drop agent nodes on an infinite canvas, wire the output of one task into the input of the next, and deploy the whole graph in one click. Each node runs a task on whichever agent you choose — Claude for one step, Codex for the next — all triggered remotely from your browser.
+
+Drag & drop nodes · branching & fan-out · cross-provider chains · live task stream per node.
+
+![Pipelines section from the CTRL NODE marketing site — #pipelines](assets/pipelines.png)
+
+---
+
+## Kanban — launch tasks without a pipeline
+
+Not every job needs a DAG. Write a task description, assign an agent, and drop it on the board. CTRL NODE sends it to your machine remotely and promotes the card through **BACKLOG → INBOX → ACTIVE → DONE** as the agent works and reports back in real time.
+
+![Kanban section from the CTRL NODE marketing site — #kanban](assets/kanban.png)
 
 ---
 
@@ -110,50 +136,65 @@ Not sure which Linux binary? `grep flags /proc/cpuinfo | head -1 | grep -o "avx[
 
 ### 3 — Run it
 
-**Linux / macOS**
-```bash
-PAIRING_TOKEN=your_pairing_token \
-OPENCLAW_GATEWAY_TOKEN=your_gateway_token \
-./ctrlnode-bridge-linux-x64
+Just run the binary — it guides you through setup on first launch:
+
+```
+$ ./ctrlnode-bridge
+
+Enter your CtrlNode pairing token (app.ctrlnode.ai → Bridge Tokens): xxxxxxxxxx
+
+Select providers to enable (Y = yes, Enter = no):
+  [ ] Enable OpenClaw?         [y/N]:
+  [ ] Enable Claude?           [y/N]:
+  [ ] Enable GitHub Copilot?   [y/N]:
+  [ ] Enable Gemini?           [y/N]:
+  [ ] Enable Codex?            [y/N]:
+  [ ] Enable Cursor?           [y/N]:
 ```
 
-**Windows (PowerShell)**
-```powershell
-$env:PAIRING_TOKEN = "your_pairing_token"
-$env:OPENCLAW_GATEWAY_TOKEN = "your_gateway_token"
-.\ctrlnode-bridge.exe
-```
+Answer `y` for each provider you want to use — the Bridge will ask for the required credentials (API key, token, or binary path) right there in the terminal, save them to a local `.env` file, and connect. On subsequent runs it reads the saved config automatically.
 
-Open the CTRL NODE web UI — your agents appear automatically. Create your first task or pipeline and watch it run.
+You can also skip the wizard and pass everything as environment variables or in a `.env` file next to the binary (see the [per-provider guides](doc/providers/) for the exact variable names).
+
+Open the CTRL NODE web UI — your agents appear automatically. Write a task, assign it, and watch it run live from your browser.
+
+See the per-provider guides in [`doc/`](doc/) for full setup instructions.
 
 ---
 
 ## Features
 
-- **n8n-style pipelines** — visual graphs with agent nodes, deploy and live execution
-- **Kanban workflow** — BACKLOG → INBOX → ACTIVE → DONE with OpenClaw dispatch
+- **Remote task launch** — write a task in the web UI, run it on your machine from anywhere; no SSH, no VPN, no open ports
+- **Live task output** — watch the agent work in real time, line by line, straight from your browser
+- **Outbound-only Bridge** — one lightweight binary on your machine opens a single outbound connection; NAT, Docker, and headless VPS all work with zero network configuration
+- **Multi-provider** — Claude, Copilot, Gemini, Codex, Cursor, OpenClaw all from one Bridge process
+- **n8n-style pipelines** — visual graphs with agent nodes, cross-provider chains, deploy and live execution
+- **Kanban workflow** — BACKLOG → INBOX → ACTIVE → DONE with real-time agent feedback
 - **Team & dashboard** — operators, roles, activity and fleet overview in one place
-- **Real-time monitoring** — live logs, agent status, pipeline progress
 - **Zero-storage by design** — workspaces stay on your side of the Bridge; CTRL NODE only sees what you stream explicitly
 
 ---
 
 ## What's in this repository
 
-| Component | Path | Status |
-|---|---|---|
-| **Bridge** | [`src/bridge/`](src/bridge/) | ✅ Open source |
-| **Marketing site** (Astro) | [`../CtrlNode.Public/`](../CtrlNode.Public/) — `npm run dev` → [http://localhost:4321/](http://localhost:4321/) | Same copy and live demos as [ctrlnode.ai](https://ctrlnode.ai) |
+| Component | Path |
+|---|---|
+| **Bridge** (open source) | [`src/`](src/) |
+| **Provider guides** | [`doc/`](doc/) |
+| **Release notes** | [`Releases/`](Releases/) |
 
-The Bridge is the client-side connector. See [src/bridge/README.md](src/bridge/README.md) for environment variables and build instructions.
+The Bridge source is in [`src/`](src/). See the [per-provider guides](doc/providers/) for environment variables and the [setup guides](doc/setup/) for deployment options.
 
 ---
 
-## Setup guides
+## Provider guides
 
-- [doc/setup/docker.md](doc/setup/docker.md) — Bridge inside a Docker container alongside OpenClaw
-- [doc/setup/linux.md](doc/setup/linux.md) — Linux server, no Docker (systemd service)
-- [doc/setup/mac.md](doc/setup/mac.md) — macOS native (launchd service)
+- [doc/claude-sdk.md](doc/claude-sdk.md) — Anthropic Claude (SDK + CLI)
+- [doc/copilot.md](doc/copilot.md) — GitHub Copilot (ACP)
+- [doc/gemini.md](doc/gemini.md) — Google Gemini CLI (ACP)
+- [doc/codex.md](doc/codex.md) — OpenAI Codex SDK
+- [doc/cursor.md](doc/cursor.md) — Cursor SDK
+- [doc/openclaw.md](doc/openclaw.md) — OpenClaw runtime
 
 ---
 
@@ -182,6 +223,6 @@ Licensed under the **[Elastic License 2.0](LICENSE)** (ELv2).
 
 <div align="center">
 
-Built by [CTRL NODE](https://ctrlnode.ai) · Works with [OpenClaw](https://github.com/openclaw/openclaw)
+Built by [CTRL NODE](https://ctrlnode.ai)
 
 </div>
