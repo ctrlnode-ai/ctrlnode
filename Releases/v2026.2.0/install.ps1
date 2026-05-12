@@ -1,9 +1,9 @@
 # CtrlNode Bridge — Windows installer
 # Usage (from PowerShell):
-#   irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/Releases/v2026.2.0/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1 | iex
 #
 # Or with a custom install directory:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/Releases/v2026.2.0/install.ps1))) -InstallDir "C:\tools\ctrlnode"
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1))) -InstallDir "C:\tools\ctrlnode"
 
 param(
   [string]$InstallDir = ""
@@ -14,6 +14,7 @@ $REPO        = "ctrlnode-ai/ctrlnode"
 $BINARY_NAME = "ctrlnode-bridge.exe"
 $ASSET       = "ctrlnode-bridge.exe"
 $DEFAULT_DIR = "$env:LOCALAPPDATA\Programs\ctrlnode"
+$DEFAULT_WORKSPACE =  $env:USERPROFILE 
 
 Write-Host ""
 Write-Host "CtrlNode Bridge Installer" -ForegroundColor Cyan
@@ -22,10 +23,18 @@ Write-Host ""
 
 # --- install directory ---
 if (-not $InstallDir) {
-  $answer = Read-Host "Install directory [$DEFAULT_DIR]"
+  $answer = Read-Host "Install directory for the Bridge binary [$DEFAULT_DIR]"
   $InstallDir = if ($answer.Trim()) { $answer.Trim() } else { $DEFAULT_DIR }
 }
 Write-Host "  Installing to: $InstallDir" -ForegroundColor Gray
+
+# --- workspace directory ---
+$workspaceAnswer = Read-Host "Workspace parent folder [$DEFAULT_WORKSPACE]  "
+$WorkspaceRoot = if ($workspaceAnswer.Trim()) { $workspaceAnswer.Trim() } else { $DEFAULT_WORKSPACE }
+Write-Host "  Workspace: $WorkspaceRoot" -ForegroundColor Gray
+
+# Persist the workspace setting so the bridge can be started with just `ctrlnode-bridge`.
+[System.Environment]::SetEnvironmentVariable('AGENTS_FOLDER', $WorkspaceRoot, 'User')
 
 # --- get latest release tag ---
 Write-Host ""
@@ -52,6 +61,7 @@ $client.DownloadFile($downloadUrl, $tmpFile)
 # --- install ---
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $dest = Join-Path $InstallDir $BINARY_NAME
+if (Test-Path $dest) { Remove-Item $dest -Force }
 Move-Item $tmpFile $dest -Force
 
 Write-Host ""
@@ -66,11 +76,23 @@ if ($currentPath -notlike "*$InstallDir*") {
 } else {
   Write-Host "    $InstallDir is already in PATH"
 }
+$env:PATH = "$InstallDir;$env:PATH"
 
 Write-Host ""
-Write-Host "Next: set your Pairing Token and start the Bridge:" -ForegroundColor Cyan
-Write-Host '  $env:PAIRING_TOKEN="<token>"; ctrlnode-bridge'
+Write-Host "Next: start the Bridge:" -ForegroundColor Cyan
+Write-Host '  ctrlnode-bridge'
 Write-Host ""
+Write-Host "Workspace: $WorkspaceRoot"
+Write-Host "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
 Write-Host "Get your token at: https://app.ctrlnode.ai  (Settings → Bridge)"
 Write-Host "Docs:              https://github.com/$REPO#readme"
 Write-Host ""
+
+# --- optional: run the bridge now ---
+$runNow = Read-Host "Do you want to run ctrlnode-bridge now? (Y/n)"
+if (-not $runNow.Trim()) { $runNow = 'y' }
+if ($runNow.Trim().ToLower() -ne 'n') {
+  $bridgePath = Join-Path $InstallDir $BINARY_NAME
+  Write-Host "Starting ctrlnode-bridge..." -ForegroundColor Cyan
+  Start-Process -FilePath $bridgePath -WorkingDirectory $WorkspaceRoot
+}
