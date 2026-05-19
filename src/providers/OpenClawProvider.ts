@@ -35,7 +35,7 @@ export class OpenClawProvider implements IProvider {
     if (!skipSessionWipe) {
       try {
         wipeAgentSessions(agentId, OPENCLAW_CONFIG);
-        logger.info('dispatch_task.sessions_wiped', { agentId });
+        logger.debug('dispatch_task.sessions_wiped', { agentId });
       } catch (err) {
         logger.warn('dispatch_task.sessions_wipe_failed', { agentId, error: String(err) });
       }
@@ -147,7 +147,7 @@ export class OpenClawProvider implements IProvider {
       sessionKey: `agent:${agentId}:main`,
     };
 
-    logger.info('openclaw_provider.spawn_attempt', { agentId, taskId, url });
+    logger.debug('openclaw_provider.spawn_attempt', { agentId, taskId, url });
 
     try {
       const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(requestBody) });

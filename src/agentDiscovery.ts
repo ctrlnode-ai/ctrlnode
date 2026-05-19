@@ -67,7 +67,7 @@ export function writeOpenClawConfig(config: any): void {
   try {
     ensureDir(path.dirname(OPENCLAW_CONFIG));
     fs.writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2), 'utf8');
-    logger.info('openclaw_config_written', {
+    logger.debug('openclaw_config_written', {
       path: OPENCLAW_CONFIG,
       agentsCount: Array.isArray(config?.agents?.list) ? config.agents.list.length : 0,
     });
@@ -210,7 +210,7 @@ export function syncAgentDiscovery(callbacks: SyncCallbacks): void {
   for (const [id, info] of Object.entries(discoveredAgents)) {
     const isOpenClawAgent = !info.provider || info.provider === 'openclaw';
     if (isOpenClawAgent && !merged[id]) {
-      logger.info('agent_removed', { agentId: id });
+      logger.debug('agent_removed', { agentId: id });
       callbacks.onAgentRemoved(id);
       delete agentStatuses[id];
       delete discoveredAgents[id];
@@ -264,7 +264,7 @@ export function upsertAgentConfig(
 
   const existing = config.agents.list.find((a: any) => a.id === normalizedId);
   const operation = existing ? 'update' : 'create';
-  logger.info('agent_metadata_update_attempt', {
+  logger.debug('agent_metadata_update_attempt', {
     agentId: normalizedId,
     operation,
     configPath: OPENCLAW_CONFIG,
@@ -286,7 +286,7 @@ export function upsertAgentConfig(
   const persistedAgent = persisted?.agents?.list?.find((a: any) => normalizeAgentId(a?.id) === normalizedId);
 
   if (persistedAgent) {
-    logger.info('agent_metadata_persisted', {
+    logger.debug('agent_metadata_persisted', {
       agentId: normalizedId,
       operation,
       configPath: OPENCLAW_CONFIG,
@@ -301,7 +301,7 @@ export function upsertAgentConfig(
     });
   }
 
-  logger.info('agent_metadata_updated', { agentId: normalizedId });
+  logger.debug('agent_metadata_updated', { agentId: normalizedId });
 }
 
 /**

@@ -53,7 +53,7 @@ export function setupCodexAgentHome(agentId: string, agentDescription: string): 
       if (extra) fs.appendFileSync(configPath, extra, 'utf8');
     }
 
-    logger.info('codex_agent_home.provisioned', { agentId, path: agentHome });
+    logger.debug('codex_agent_home.provisioned', { agentId, path: agentHome });
   } catch (e) {
     logger.warn('codex_agent_home.provision_failed', { agentId, err: String(e) });
   }

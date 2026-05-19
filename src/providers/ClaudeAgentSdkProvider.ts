@@ -33,6 +33,7 @@ import {
 } from '../config';
 import { discoveredAgents } from '../agentDiscovery';
 import { logger } from '../logger';
+import { fetchAnthropicModels as _fetchAnthropicModels } from './providerFileUtils';
 
 /** Ctrlnode workspace root — base for all task and workspace paths. */
 const CTRLNODE_ROOT = AGENTS_CTRLNODE_ROOT;
@@ -207,7 +208,9 @@ export class ClaudeAgentSdkProvider implements IProvider {
   resolveWorkspaceCreationBase(_useCtrlnode: boolean): string | null {
     return null;
   }
-
+  async listModels(): Promise<string[]> {
+    return _fetchAnthropicModels(ANTHROPIC_API_KEY);
+  }
   // ── Internal ───────────────────────────────────────────────────────────────
 
   private async _runQuery(opts: {

@@ -11,6 +11,49 @@ import path from 'path';
 import { logger } from '../logger';
 import { AGENTS_CTRLNODE_ROOT } from '../config';
 
+// ── Shared model-listing helpers ──────────────────────────────────────────────
+
+/** Fetch available model IDs from the Anthropic API. Returns [] on any failure. */
+export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
+  if (!apiKey) return [];
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json() as any;
+    return ((data.data ?? []) as any[]).map((m: any) => m.id as string).filter(Boolean).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch available model IDs from the OpenAI-compatible API. Returns [] on any failure. */
+export async function fetchOpenAiCompatibleModels(
+  apiKey: string,
+  baseUrl = 'https://api.openai.com',
+  filterFn?: (id: string) => boolean,
+): Promise<string[]> {
+  if (!apiKey) return [];
+  const defaultFilter = (id: string) => /^(gpt-4|gpt-3\.5|o[1-9]|codex)/i.test(id);
+  const keep = filterFn ?? defaultFilter;
+  try {
+    const resp = await fetch(`${baseUrl}/v1/models`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json() as any;
+    return ((data.data ?? []) as any[])
+      .map((m: any) => m.id as string)
+      .filter((id: string) => id && keep(id))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 // ── Status tag detection ──────────────────────────────────────────────────────
 
 export function detectStatusTag(text: string): { status: 'completed' | 'failed' | 'blocked'; reason?: string } {
@@ -38,7 +81,7 @@ export function writeOutputFile(
     fs.mkdirSync(outputDir, { recursive: true });
     const outFile = path.join(outputDir, `${folderBasename}-output.md`);
     fs.writeFileSync(outFile, text, 'utf8');
-    logger.info(`${logPrefix}.output_file_written`, { taskId, path: outFile });
+    logger.debug(`${logPrefix}.output_file_written`, { taskId, path: outFile });
   } catch (err: any) {
     logger.warn(`${logPrefix}.output_file_write_failed`, { taskId, error: err.message });
   }
@@ -59,7 +102,7 @@ export function writeAgentLog(
     fs.mkdirSync(outputDir, { recursive: true });
     const logFile = path.join(outputDir, 'agent_log.md');
     fs.writeFileSync(logFile, text, 'utf8');
-    logger.info(`${logPrefix}.agent_log_written`, { taskId, path: logFile });
+    logger.debug(`${logPrefix}.agent_log_written`, { taskId, path: logFile });
   } catch (err: any) {
     logger.warn(`${logPrefix}.agent_log_write_failed`, { taskId, error: err.message });
   }

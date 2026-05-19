@@ -127,6 +127,20 @@ export class MultiProvider implements IProvider {
     return null;
   }
 
+  async listModels(): Promise<string[]> {
+    const results = await Promise.allSettled(
+      this.providers.filter(p => p.listModels).map(p => p.listModels!()),
+    );
+    // MultiProvider returns a flat deduplicated list across all sub-providers.
+    const seen = new Set<string>();
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        for (const id of r.value) seen.add(id);
+      }
+    }
+    return [...seen].sort();
+  }
+
   // ── Internal helpers ──────────────────────────────────────────────────────────
 
   private resolveOwner(agentId: string): IProvider {

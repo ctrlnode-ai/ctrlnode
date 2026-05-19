@@ -16,7 +16,11 @@ function write(level: LogLevel, payload: Record<string, any>) {
 }
 
 export const logger = {
-  debug: (msg: string, meta: Record<string, any> = {}) => {}, // Debug logs disabled
+  debug: (msg: string, meta: Record<string, any> = {}) => {
+    if (process.env.DEBUG === 'true' || process.env.DEBUG === '1') {
+      write('debug', { msg, ...meta });
+    }
+  },
   info:  (msg: string, meta: Record<string, any> = {}) => write('info',  { msg, ...meta }),
   warn:  (msg: string, meta: Record<string, any> = {}) => write('warn',  { msg, ...meta }),
   error: (msg: string, meta: Record<string, any> = {}) => write('error', { msg, ...meta }),

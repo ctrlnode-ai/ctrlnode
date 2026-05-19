@@ -22,6 +22,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery';
 import { logger } from '../logger';
 import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
+import { CURSOR_KNOWN_MODELS } from './knownModels';
 import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded';
 
 /**
@@ -114,6 +115,16 @@ export class CursorSdkProvider implements IProvider {
   resolveWorkspaceCreationBase(_useCtrlnode: boolean): string | null {
     // Cursor SDK does not support SaaS-initiated workspace creation.
     return null;
+  }
+
+  async listModels(): Promise<string[]> {
+    const { fetchOpenAiCompatibleModels } = await import('./providerFileUtils');
+    const apiKey = process.env.CURSOR_API_KEY ?? '';
+    // Cursor uses an OpenAI-compatible API at api.cursor.sh — accept all ids
+    const models = await fetchOpenAiCompatibleModels(apiKey, 'https://api.cursor.sh', () => true);
+    if (models.length > 0) return models;
+    // Static fallback of known Cursor models
+    return CURSOR_KNOWN_MODELS;
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────

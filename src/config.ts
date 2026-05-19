@@ -9,10 +9,22 @@ import fs from 'fs';
 import { logger } from './logger';
 import { resolveOpenClawConfigPath } from './configResolution';
 
-// ── Load .env from cwd (needed for compiled exe — Bun only auto-loads .env in dev) ──
+// ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
+function _findDotenv(): string | null {
+  const candidates = [
+    path.join(process.cwd(), '.env'),
+    path.join(process.env.AGENTS_FOLDER || os.homedir(), '.ctrlnode', '.env'),
+    path.join(os.homedir(), '.env'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
 let _dotenvPath: string | null = null;
 try {
-  const envFile = path.join(process.cwd(), '.env');
+  const envFile = _findDotenv();
+  if (!envFile) throw new Error('no .env');
   const raw = fs.readFileSync(envFile, 'utf8');
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -123,14 +135,14 @@ export const COPILOT_TIMEOUT_MINUTES = parseInt(process.env.COPILOT_TIMEOUT_MINU
 // All non-OpenClaw providers (Cursor, Gemini, Codex, Copilot, Claude) use this
 // as the root for their workspace and task folders.
 // Structure: AGENTS_FOLDER/ctrlnode/{tasks,workspace-mc-xxx,...}
-export let AGENTS_FOLDER = process.env.AGENTS_FOLDER || process.cwd();
+export let AGENTS_FOLDER = process.env.AGENTS_FOLDER || os.homedir();
 
 // Auto-bootstrap common folder structure if it doesn't exist
-const agentsRoot = path.join(AGENTS_FOLDER, 'ctrlnode');
+const agentsRoot = path.join(AGENTS_FOLDER, '.ctrlnode');
 if (!fs.existsSync(agentsRoot)) {
   try {
     fs.mkdirSync(agentsRoot, { recursive: true });
-    logger.info(`Bootstrap: Created missing agents root at ${agentsRoot}`);
+    logger.debug(`Bootstrap: Created missing agents root at ${agentsRoot}`);
   } catch (err) {
     logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
   }
@@ -153,12 +165,40 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.1';
+export const BRIDGE_VERSION = 'v2026.2.0';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
-const runtimePrompt = (globalThis as any).prompt as ((message: string) => string | null | undefined) | undefined;
-const canPrompt = typeof runtimePrompt === 'function';
+/**
+ * Synchronous TTY prompt that works in compiled Bun binaries on all platforms.
+ * On Windows, uses globalThis.prompt (blocks correctly in Bun).
+ * On Linux/macOS, reads directly from /dev/tty to avoid Bun's prompt returning '' immediately.
+ */
+function ttyPrompt(message: string): string | null {
+  if (process.platform === 'win32') {
+    const builtinPrompt = (globalThis as any).prompt as ((msg: string) => string | null | undefined) | undefined;
+    if (typeof builtinPrompt === 'function') {
+      const result = builtinPrompt(message);
+      return result ?? null;
+    }
+    return null;
+  }
+
+  // Linux / macOS: read directly from /dev/tty — blocks until the user presses Enter.
+  try {
+    const { execFileSync } = require('child_process') as typeof import('child_process');
+    process.stderr.write(message + ' ');
+    const line = execFileSync('bash', ['-c', 'read -r _line </dev/tty && printf "%s" "$_line"'], {
+      stdio: ['inherit', 'pipe', 'inherit'],
+      timeout: 0,
+    });
+    return line.toString();
+  } catch {
+    return null;
+  }
+}
+
+const canPrompt = process.stdout.isTTY === true;
 
 /** --setup flag forces re-running all interactive prompts even if env vars are set. */
 const FORCE_SETUP = process.argv.includes('--setup');
@@ -172,14 +212,14 @@ export const DOTENV_PATH: string | null = _dotenvPath;
 
 if (process.stdout.isTTY && canPrompt) {
   if (FORCE_SETUP) {
-    const input = runtimePrompt!(`Enter SaaS URL [${SAAS_URL}]:`);
+    const input = ttyPrompt(`Enter SaaS URL [${SAAS_URL}]:`);
     SAAS_URL = (input?.trim() || SAAS_URL).trim();
   }
 
   if (!PAIRING_TOKEN || FORCE_SETUP) {
     let tokenInput: string | null = null;
     while (!tokenInput?.trim()) {
-      tokenInput = runtimePrompt!('Enter your CtrlNode pairing token (app.ctrlnode.ai → Bridge Tokens)') ?? null;
+      tokenInput = ttyPrompt('Enter your CtrlNode pairing token (app.ctrlnode.ai → Bridge Tokens)') ?? null;
       if (!tokenInput?.trim()) {
         console.error('  ✗ Token required. Press Ctrl+C to cancel.');
       }
@@ -190,7 +230,7 @@ if (process.stdout.isTTY && canPrompt) {
   // If providers were set via env (not interactive), still ask for agents folder if needed
   if (_providersEnvSet && PROVIDERS.some(p => p !== 'openclaw') && FORCE_SETUP) {
     const defaultFolder = process.cwd();
-    const input = runtimePrompt!(`Enter working folder for agent files [${defaultFolder}]:`);
+    const input = ttyPrompt(`Enter working folder for agent files [${defaultFolder}]:`);
     process.env.AGENTS_FOLDER = input?.trim() || defaultFolder;
   }
 
@@ -207,7 +247,7 @@ if (process.stdout.isTTY && canPrompt) {
     console.log('\nSelect providers to enable (Y = yes, Enter = no):');
     const selected: string[] = [];
     for (const { label, id } of SELECTABLE) {
-      const answer = runtimePrompt!(`  [ ] Enable ${label}? [y/N]:`);
+      const answer = ttyPrompt(`  [ ] Enable ${label}? [y/N]:`);
       const yes = !!answer && /^y/i.test(answer.trim());
       if (yes) selected.push(id);
     }
@@ -222,7 +262,7 @@ if (process.stdout.isTTY && canPrompt) {
     // Ask for agents folder now that we know which providers are active
     if (PROVIDERS.some(p => p !== 'openclaw') && FORCE_SETUP) {
       const defaultFolder = process.cwd();
-      const input = runtimePrompt!(`Enter working folder for agent files [${defaultFolder}]:`);
+      const input = ttyPrompt(`Enter working folder for agent files [${defaultFolder}]:`);
       process.env.AGENTS_FOLDER = input?.trim() || defaultFolder;
     }
 
@@ -233,12 +273,12 @@ if (process.stdout.isTTY && canPrompt) {
       console.log('    2. An Anthropic API key');
       let claudeMode: string | null = null;
       while (!claudeMode || (claudeMode.trim() !== '1' && claudeMode.trim() !== '2')) {
-        claudeMode = runtimePrompt!('  Choose [1/2]:') ?? null;
+        claudeMode = ttyPrompt('  Choose [1/2]:') ?? null;
       }
       if (claudeMode.trim() === '2') {
         let key: string | null = null;
         while (!key?.trim()) {
-          key = runtimePrompt!('  Enter your Anthropic API key:') ?? null;
+          key = ttyPrompt('  Enter your Anthropic API key:') ?? null;
           if (!key?.trim()) console.error('  ✗ API key required. Press Ctrl+C to cancel.');
         }
         process.env.ANTHROPIC_API_KEY = key.trim();
@@ -251,7 +291,7 @@ if (process.stdout.isTTY && canPrompt) {
     if (PROVIDERS.includes('cursor') && (!process.env.CURSOR_API_KEY || FORCE_SETUP)) {
       let key: string | null = null;
       while (!key?.trim()) {
-        key = runtimePrompt!('\n  Enter your Cursor API key (Cursor Dashboard → Integrations):') ?? null;
+        key = ttyPrompt('\n  Enter your Cursor API key (Cursor Dashboard → Integrations):') ?? null;
         if (!key?.trim()) console.error('  ✗ Cursor API key required. Press Ctrl+C to cancel.');
       }
       process.env.CURSOR_API_KEY = key.trim();
@@ -261,7 +301,7 @@ if (process.stdout.isTTY && canPrompt) {
     if (PROVIDERS.includes('openclaw') && (!process.env.OPENCLAW_GATEWAY_TOKEN || FORCE_SETUP)) {
       let key: string | null = null;
       while (!key?.trim()) {
-        key = runtimePrompt!('\n  Enter your OpenClaw gateway token:') ?? null;
+        key = ttyPrompt('\n  Enter your OpenClaw gateway token:') ?? null;
         if (!key?.trim()) console.error('  ✗ OpenClaw token required. Press Ctrl+C to cancel.');
       }
       process.env.OPENCLAW_GATEWAY_TOKEN = key.trim();
@@ -270,7 +310,7 @@ if (process.stdout.isTTY && canPrompt) {
 
   if (PROVIDERS.includes('openclaw') && (!process.env.OPENCLAW_CONFIG_PATH && !process.env.OPENCLAW_STATE_DIR && !process.env.OPENCLAW_HOME || FORCE_SETUP)) {
     const defaultDir = path.join(os.homedir(), '.openclaw');
-    const input = runtimePrompt!(`Enter OpenClaw directory [${defaultDir}]:`);
+    const input = ttyPrompt(`Enter OpenClaw directory [${defaultDir}]:`);
     const selectedDir = (input || defaultDir).trim();
     process.env.OPENCLAW_HOME = selectedDir.replace(/[\\\/]\.openclaw$/, '');
   }
@@ -284,13 +324,15 @@ if (process.stdout.isTTY && canPrompt) {
       if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
       if (SAAS_URL && SAAS_URL !== 'wss://api.ctrlnode.ai/ws/bridge') envLines.push(`SAAS_URL=${SAAS_URL}`);
       if (PROVIDERS.length) envLines.push(`PROVIDERS=${PROVIDERS.join(',')}`);
-      if (process.env.AGENTS_FOLDER && process.env.AGENTS_FOLDER !== process.cwd()) envLines.push(`AGENTS_FOLDER=${process.env.AGENTS_FOLDER}`);
+      if (process.env.AGENTS_FOLDER) envLines.push(`AGENTS_FOLDER=${process.env.AGENTS_FOLDER}`);
       if (process.env.ANTHROPIC_API_KEY) envLines.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
       if (process.env.CURSOR_API_KEY) envLines.push(`CURSOR_API_KEY=${process.env.CURSOR_API_KEY}`);
       if (process.env.OPENCLAW_GATEWAY_TOKEN) envLines.push(`OPENCLAW_GATEWAY_TOKEN=${process.env.OPENCLAW_GATEWAY_TOKEN}`);
       if (process.env.OPENCLAW_HOME) envLines.push(`OPENCLAW_HOME=${process.env.OPENCLAW_HOME}`);
       if (envLines.length > 0) {
-        const envPath = path.join(process.cwd(), '.env');
+        const ctrlnodeDir = path.join(process.env.AGENTS_FOLDER || os.homedir(), '.ctrlnode');
+        fs.mkdirSync(ctrlnodeDir, { recursive: true });
+        const envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
         console.log(`\n  ✓ Configuration saved to ${envPath}`);
       }
@@ -306,7 +348,24 @@ ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY    || ANTHROPIC_API_KEY;
 CURSOR_API_KEY       = process.env.CURSOR_API_KEY       || CURSOR_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
 AGENTS_FOLDER        = process.env.AGENTS_FOLDER        || AGENTS_FOLDER;
-AGENTS_CTRLNODE_ROOT = path.join(AGENTS_FOLDER, 'ctrlnode');
+AGENTS_CTRLNODE_ROOT = path.join(AGENTS_FOLDER, '.ctrlnode');
+
+// ── Auto-persist AGENTS_FOLDER if missing from an existing .env ──────────────
+// When a user already had PAIRING_TOKEN + PROVIDERS in their .env, the
+// interactive setup is skipped and AGENTS_FOLDER is never written. Detect this
+// and silently append the default (os.homedir()) so future runs are consistent.
+if (_dotenvPath && !process.env.AGENTS_FOLDER) {
+  const defaultAgentsFolder = os.homedir();
+  try {
+    fs.appendFileSync(_dotenvPath, `\nAGENTS_FOLDER=${defaultAgentsFolder}\n`, 'utf8');
+    process.env.AGENTS_FOLDER = defaultAgentsFolder;
+    AGENTS_FOLDER = defaultAgentsFolder;
+    AGENTS_CTRLNODE_ROOT = path.join(AGENTS_FOLDER, '.ctrlnode');
+    logger.debug('agents_folder_auto_persisted', { path: _dotenvPath, value: defaultAgentsFolder });
+  } catch (e: any) {
+    logger.warn('agents_folder_auto_persist_failed', { error: e?.message });
+  }
+}
 
 if (!PAIRING_TOKEN) {
   logger.error('pairing_token_missing', { message: 'PAIRING_TOKEN is required.' });
@@ -347,7 +406,7 @@ export function refreshOpenClawConfig(): string {
   });
 
   OPENCLAW_CONFIG = resolvedConfig.path;
-  logger.info('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
+  logger.debug('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
   return OPENCLAW_CONFIG;
 }
 
@@ -368,3 +427,4 @@ if (PROVIDERS.includes('openclaw') && !fs.existsSync(OPENCLAW_CONFIG)) {
     process.exit(1);
   }
 }
+
