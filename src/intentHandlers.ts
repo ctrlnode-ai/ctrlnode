@@ -43,7 +43,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     parsedArgs = args ?? (content ? { message: content } : undefined);
   }
 
-  logger.info('intent.received', { agentId: targetId, intentType, providerMethod, executionId, contextTaskId, rawArgs: args });
+  logger.debug('intent.received', { agentId: targetId, intentType, providerMethod, executionId, contextTaskId, rawArgs: args });
 
   // ── dispatch_task: delegate to provider ──────────────────────────────────────
   if (intentType === 'dispatch_task') {
@@ -170,7 +170,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     return;
   }
 
-  logger.info('intent.request', { agentId: targetId, intentType, providerMethod, args: parsedArgs, executionId, contextTaskId });
+  logger.debug('intent.request', { agentId: targetId, intentType, providerMethod, args: parsedArgs, executionId, contextTaskId });
   await handleInvokeTool(msg, ctx, { intentType, providerMethod });
 }
 

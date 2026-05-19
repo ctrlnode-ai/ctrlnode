@@ -24,7 +24,7 @@ import {
 import { handleIntentAction, handleInvokeTool } from './intentHandlers';
 
 /** Actions that only make sense for the OpenClaw provider */
-const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'update_agent_config', 'invoke_tool', 'init_ping', 'check_task_output']);
+const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'update_agent_config', 'invoke_tool', 'init_ping']);
 
 export type { HandlerContext, SendFn } from './handlerContext';
 
@@ -32,7 +32,7 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
   let msg: BridgeMessage;
   try {
     msg = JSON.parse(raw.toString());
-    logger.info('saas_message_received', {
+    logger.debug('saas_message_received', {
       action: msg.action,
       agentId: msg.agentId,
       requestId: msg.requestId,

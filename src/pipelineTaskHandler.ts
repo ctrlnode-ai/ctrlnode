@@ -70,7 +70,7 @@ export function handleActivatePipelineTask(msg: BridgeMessage, ctx: HandlerConte
       fs.writeFileSync(outputGitkeep, '', 'utf8');
     }
 
-    logger.info('activate_pipeline_task', {
+    logger.debug('activate_pipeline_task', {
       predecessorAgentId, predecessorTaskFolderName,
       nextTaskAgentId, nextTaskFolderName, filesCopied,
     });

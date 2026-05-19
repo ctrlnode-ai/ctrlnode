@@ -22,7 +22,13 @@ import { logger } from '../logger';
 import { discoveredAgents } from '../agentDiscovery';
 import { getCodexAgentHome } from '../filesystemConfigHandlers';
 import { setAgentRunning } from '../websocket';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
+import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils';
+
+/** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
+async function fetchOpenAiModels(): Promise<string[]> {
+  const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
+  return fetchOpenAiCompatibleModels(apiKey ?? '');
+}
 
 export class CodexSdkProvider implements IProvider {
   readonly providerName = 'codex';
@@ -69,7 +75,9 @@ export class CodexSdkProvider implements IProvider {
     // Codex SDK does not support SaaS-initiated workspace creation.
     return null;
   }
-
+  async listModels(): Promise<string[]> {
+    return fetchOpenAiModels();
+  }
   // ── Internal ────────────────────────────────────────────────────────────────
 
   private async _run(

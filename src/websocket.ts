@@ -68,7 +68,11 @@ export function sendToSaas(payload: any): void {
   try {
     const json = JSON.stringify(payload);
     if (ws && isConnected && ws.readyState === WebSocket.OPEN) {
-      logger.debug('outgoing', { payloadType: payload?.action || 'unknown', preview: json.slice(0, 512) });
+      // Skip per-chunk text stream traces — too noisy
+      if (!(payload?.action === 'agent_stream' && payload?.event?.kind === 'text_chunk') &&
+          !(payload?.action === 'agent_activity')) {
+        logger.debug('outgoing', { payloadType: payload?.action || 'unknown', preview: json.slice(0, 512) });
+      }
       ws.send(json);
     } else {
       pendingQueue.push(payload);
@@ -127,6 +131,7 @@ export function setAgentRunning(agentId: string): void {
 function sendHeartbeat(): void {
   if (!isConnected) return;
   const agents = Object.keys(discoveredAgents);
+  if (agents.length === 0) return;
   sendToSaas({
     action:       'heartbeat',
     agents,
@@ -310,9 +315,57 @@ export function connect(provider?: IProvider): void {
     isConnected = true;
     logger.info('connected', {});
 
-    const hs = { action: 'handshake', version: BRIDGE_VERSION, agents: buildAgentSummaries() };
-    logger.info('handshake_sent', { agentCount: hs.agents?.length ?? 0 });
+    const isOpenClaw = PROVIDERS.includes('openclaw');
+    const agents = isOpenClaw ? buildAgentSummaries() : [];
+    const hs = { action: 'handshake', version: BRIDGE_VERSION, agents, providers: PROVIDERS };
+    if (isOpenClaw) {
+      logger.info('handshake_sent', { providers: PROVIDERS, agentCount: agents.length });
+    } else {
+      logger.info('handshake_sent', { providers: PROVIDERS });
+    }
     sendToSaas(hs);
+
+    // Async: query each active provider for its available models and forward to SaaS.
+    // This must not block the handshake or the message loop.
+    void (async () => {
+      try {
+        if (!activeProvider?.listModels) return;
+        const providerModels = await Promise.race([
+          activeProvider.listModels(),
+          new Promise<string[]>(resolve => setTimeout(() => resolve([]), 12_000)),
+        ]);
+        if (providerModels.length > 0) {
+          // Send per-provider map: for a MultiProvider the names collapse into the flat list;
+          // here we use the top-level provider name so the backend can key by it.
+          const models: Record<string, string[]> = {};
+          // Expand MultiProvider sub-providers if supported, otherwise use top-level name.
+          if ((activeProvider as any).providers) {
+            const subProviders: IProvider[] = (activeProvider as any).providers;
+            const subResults = await Promise.allSettled(
+              subProviders.filter(p => p.listModels).map(p =>
+                Promise.race([
+                  p.listModels!(),
+                  new Promise<string[]>(resolve => setTimeout(() => resolve([]), 10_000)),
+                ]).then(ids => ({ name: p.providerName, ids }))
+              )
+            );
+            for (const r of subResults) {
+              if (r.status === 'fulfilled' && r.value.ids.length > 0) {
+                models[r.value.name] = r.value.ids;
+              }
+            }
+          } else {
+            models[activeProvider.providerName] = providerModels;
+          }
+          if (Object.keys(models).length > 0) {
+            sendToSaas({ action: 'available_models', models });
+            logger.info('available_models_sent', { providers: Object.keys(models).join(',') });
+          }
+        }
+      } catch (err: any) {
+        logger.warn('available_models_fetch_failed', { error: err?.message });
+      }
+    })();
 
     flushPendingQueue();
     startHeartbeat();
