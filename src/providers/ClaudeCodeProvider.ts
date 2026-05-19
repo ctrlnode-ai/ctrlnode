@@ -159,6 +159,12 @@ export class ClaudeCodeProvider implements IProvider {
     return null;
   }
 
+  async listModels(): Promise<string[]> {
+    const { fetchAnthropicModels } = await import('./providerFileUtils');
+    const { ANTHROPIC_API_KEY } = await import('../config');
+    return fetchAnthropicModels(ANTHROPIC_API_KEY);
+  }
+
   // ── Internal ────────────────────────────────────────────────────────────────
 
   private async _spawnClaude(opts: {

@@ -58,7 +58,7 @@ runSyncAgents();
 // ── Process signals ───────────────────────────────────────────────────────────
 
 process.on('SIGINT',  () => {
-  logger.info('shutdown', { message: 'Shutting down' });
+  logger.debug('shutdown', { message: 'Shutting down' });
   provider.dispose().finally(() => process.exit(0));
 });
 process.on('SIGTERM', () => process.emit('SIGINT'));

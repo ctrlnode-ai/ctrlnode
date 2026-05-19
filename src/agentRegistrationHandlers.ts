@@ -43,7 +43,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
   const aliases: Record<string, string> = { 'claude-sdk': 'claude', 'claude': 'claude-sdk' };
   const providerActive = PROVIDERS.includes(provider) || PROVIDERS.includes(aliases[provider] ?? '');
   if (!providerActive) {
-    logger.info(`${action}.skip_no_provider`, { providers: PROVIDERS });
+    logger.debug(`${action}.skip_no_provider`, { providers: PROVIDERS });
     ctx.sendToSaas({ action: ackAction, requestId, success: true, error: null });
     return;
   }
@@ -55,7 +55,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
 
   try {
     const parsed = JSON.parse(agents) as Array<{ id: string; name?: string; workspace?: string; model?: string; role?: string; description?: string }>;
-    logger.info(action, { count: parsed.length });
+    logger.debug(action, { count: parsed.length });
 
     const incomingIds = new Set<string>();
     for (const a of parsed) {
@@ -63,7 +63,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
       if (!normalId) continue;
       incomingIds.add(normalId);
       if (purgedAgentIds.has(normalId)) {
-        logger.info(`${action}.skip_purged`, { id: normalId });
+        logger.debug(`${action}.skip_purged`, { id: normalId });
         continue;
       }
       const existing = discoveredAgents[normalId];
@@ -77,7 +77,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
         provider,
       };
       if (!agentStatuses[normalId]) agentStatuses[normalId] = 'idle';
-      logger.info(existing ? `${action}.updated` : `${action}.registered`, {
+      logger.debug(existing ? `${action}.updated` : `${action}.registered`, {
         id: normalId, name: a.name, model: a.model, hasDescription: !!a.description,
       });
 
@@ -93,7 +93,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
       if (info.provider === provider && !incomingIds.has(id) && !purgedAgentIds.has(id)) {
         delete discoveredAgents[id];
         purgedAgentIds.add(id);
-        logger.info(`${action}.removed_stale`, { id });
+        logger.debug(`${action}.removed_stale`, { id });
       }
     }
 
@@ -129,7 +129,7 @@ export async function handleDeleteAgentFolders(msg: BridgeMessage, ctx: HandlerC
   const ok = await deleteDir(resolved);
   if (ok) {
     deleted.push(resolved);
-    logger.info('delete_agent_folders.deleted', { agentId, folder: resolved });
+    logger.debug('delete_agent_folders.deleted', { agentId, folder: resolved });
   } else {
     errors.push(`DELETE_FAILED: ${resolved}`);
     logger.warn('delete_agent_folders.failed', { agentId, folder: resolved });
@@ -157,8 +157,8 @@ export function handleDeleteAgentConfig(msg: BridgeMessage, ctx: HandlerContext)
 
   // For Cursor: deregister from the Cursor SDK (fire-and-forget, non-blocking).
   ctx.provider.deleteAgent(msg.agentId ?? '').then((ok) => {
-    if (ok) logger.info('delete_agent_config.cursor_sdk_deleted', { agentId: msg.agentId });
-    else    logger.info('delete_agent_config.cursor_sdk_skip', { agentId: msg.agentId });
+    if (ok) logger.debug('delete_agent_config.cursor_sdk_deleted', { agentId: msg.agentId });
+    else    logger.debug('delete_agent_config.cursor_sdk_skip', { agentId: msg.agentId });
   }).catch((err: any) => {
     logger.warn('delete_agent_config.cursor_sdk_error', { agentId: msg.agentId, error: err?.message });
   });

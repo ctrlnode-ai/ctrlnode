@@ -175,7 +175,7 @@ function readMainSessionLog(
         fs.mkdirSync(path.dirname(outputPath), { recursive: true });
         fs.writeFileSync(outputPath, logContent || '(no messages)', 'utf8');
         
-        logger.info('poller.write_success', { taskId, outputPath });
+        logger.debug('poller.write_success', { taskId, outputPath });
         
         if (sendToSaas) {
           sendToSaas({ action: 'file_changed', agentId, path: outputPath });
@@ -243,7 +243,7 @@ function readMainSessionLog(
       }
 
       if (detectedStatus) {
-        logger.info('poller.status_tag_detected', { taskId, status: detectedStatus });
+        logger.debug('poller.status_tag_detected', { taskId, status: detectedStatus });
         // Always write the log file when completion is detected.
         if (taskFolderName) {
           const outputPath = path.isAbsolute(taskFolderName)
@@ -291,7 +291,7 @@ export function startMainSessionPolling(
   if (!taskId) {
     logger.warn('poller.start_skipped_no_task_id', { agentId });
   } else {
-    logger.info('poller.starting', { agentId, taskId, taskFolderName });
+    logger.debug('poller.starting', { agentId, taskId, taskFolderName });
   }
 
   // Stop any existing poller for this specific task before starting a new one.

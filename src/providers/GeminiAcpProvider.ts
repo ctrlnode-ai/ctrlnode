@@ -14,6 +14,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery';
 import { logger } from '../logger';
 import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
+import { GEMINI_KNOWN_MODELS } from './knownModels';
 
 export class GeminiAcpProvider implements IProvider {
   readonly providerName = 'gemini';
@@ -55,6 +56,29 @@ export class GeminiAcpProvider implements IProvider {
   resolveWorkspaceCreationBase(_useCtrlnode: boolean): string | null {
     // Gemini ACP does not support SaaS-initiated workspace creation.
     return null;
+  }
+
+  async listModels(): Promise<string[]> {
+    // Gemini CLI reads GEMINI_API_KEY / GOOGLE_API_KEY from env.
+    // The Gemini REST API returns the full model list when a key is available.
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) return GEMINI_KNOWN_MODELS;
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=100`,
+        { signal: AbortSignal.timeout(8_000) },
+      );
+      if (!resp.ok) return GEMINI_KNOWN_MODELS;
+      const data = await resp.json() as any;
+      const ids: string[] = ((data.models ?? []) as any[])
+        .map((m: any) => (m.name as string)?.replace(/^models\//, ''))
+        .filter(Boolean)
+        .filter((id: string) => /^gemini/i.test(id))
+        .sort();
+      return ids.length > 0 ? ids : GEMINI_KNOWN_MODELS;
+    } catch {
+      return GEMINI_KNOWN_MODELS;
+    }
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -110,7 +134,7 @@ export class GeminiAcpProvider implements IProvider {
     trustGeminiDirectory(providerTasksRoot, taskId);
     trustGeminiDirectory(AGENTS_CTRLNODE_ROOT, taskId);
 
-    logger.info('gemini_acp.spawn', { taskId, cwd: spawnCwd, args: acpArgs, geminiMd: wroteGeminiMd });
+    logger.debug('gemini_acp.spawn', { taskId, cwd: spawnCwd, args: acpArgs, geminiMd: wroteGeminiMd });
 
     const proc = spawn(cmd, args, {
       cwd: spawnCwd,
@@ -135,7 +159,7 @@ export class GeminiAcpProvider implements IProvider {
     });
     proc.on('close', (code) => {
       procExitCode = code;
-      logger.info('gemini_acp.proc_close', { taskId, code });
+      logger.debug('gemini_acp.proc_close', { taskId, code });
       earlyExitReject?.(new Error(`gemini process exited with code ${code}`));
     });
 
@@ -169,7 +193,7 @@ export class GeminiAcpProvider implements IProvider {
           (o: any) => o.kind === 'allow_once' || o.kind === 'allow_always',
         );
         if (allowOption) {
-          logger.info('gemini_acp.permission_granted', { taskId, tool: params.toolCall?.title, optionId: allowOption.optionId });
+          logger.debug('gemini_acp.permission_granted', { taskId, tool: params.toolCall?.title, optionId: allowOption.optionId });
           return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
         }
         logger.warn('gemini_acp.permission_cancelled', { taskId, tool: params.toolCall?.title });
@@ -199,7 +223,7 @@ export class GeminiAcpProvider implements IProvider {
         fs.mkdirSync(path.dirname(safePath), { recursive: true });
         fs.writeFileSync(safePath, params.content, 'utf8');
         writtenFiles.push(safePath);
-        logger.info('gemini_acp.file_written', { taskId, path: safePath });
+        logger.debug('gemini_acp.file_written', { taskId, path: safePath });
         callbacks.onStream({ kind: 'file_written', taskId, path: safePath });
         return {};
       },
@@ -212,12 +236,12 @@ export class GeminiAcpProvider implements IProvider {
         }
         try {
           const content = fs.readFileSync(safePath, 'utf8');
-          logger.info('gemini_acp.file_read', { taskId, path: safePath });
+          logger.debug('gemini_acp.file_read', { taskId, path: safePath });
           return { content };
         } catch (err: any) {
           if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
             // File doesn't exist yet — return empty so the agent knows it can write it.
-            logger.info('gemini_acp.file_not_found', { taskId, path: safePath });
+            logger.debug('gemini_acp.file_not_found', { taskId, path: safePath });
             return { content: '' };
           }
           throw new Error(`Cannot read file: ${err.message}`);
@@ -396,7 +420,7 @@ function trustGeminiDirectory(dir: string, taskId: string): void {
       settings.security.folderTrust ??= {};
       settings.security.folderTrust.enabled = true;
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-      logger.info('gemini_acp.folder_trust_enabled', { taskId });
+      logger.debug('gemini_acp.folder_trust_enabled', { taskId });
     }
 
     // 2. Write trusted folder entries to trustedFolders.json
@@ -417,7 +441,7 @@ function trustGeminiDirectory(dir: string, taskId: string): void {
 
     if (added.length > 0) {
       fs.writeFileSync(trustPath, JSON.stringify(trusted, null, 2), 'utf8');
-      logger.info('gemini_acp.trusted_dirs_added', { taskId, added });
+      logger.debug('gemini_acp.trusted_dirs_added', { taskId, added });
     }
   } catch (e) {
     logger.warn('gemini_acp.trusted_dirs_write_failed', { taskId, err: String(e) });

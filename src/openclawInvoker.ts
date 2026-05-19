@@ -93,12 +93,12 @@ export async function handleInvokeTool(
       if (!toolArgs?.skipSessionWipe) {
         try {
           wipeAgentSessions(targetId!, OPENCLAW_CONFIG);
-          logger.info('dispatch_task.sessions_wiped', { agentId: targetId });
+          logger.debug('dispatch_task.sessions_wiped', { agentId: targetId });
         } catch (err) {
           logger.warn('dispatch_task.sessions_wipe_failed', { agentId: targetId, error: String(err) });
         }
       } else {
-        logger.info('dispatch_task.sessions_wipe_skipped', { agentId: targetId, reason: 'non-first pipeline task' });
+        logger.debug('dispatch_task.sessions_wipe_skipped', { agentId: targetId, reason: 'non-first pipeline task' });
       }
 
       // Rewrite relative task paths (tasks/{folder}/…) to absolute so the model always
@@ -145,7 +145,7 @@ export async function handleInvokeTool(
   const url = `${baseUrl}/tools/invoke`;
   const requestBody = buildRequestBody(toolName, targetId!, toolArgs, effectiveSessionId, effectiveSessionKey);
 
-  logger.info(intentType ? 'intent.http_send_attempt' : 'tool.http_send_attempt', {
+  logger.debug(intentType ? 'intent.http_send_attempt' : 'tool.http_send_attempt', {
     agentId: targetId,
     tool: toolName,
     sessionId: effectiveSessionId,
@@ -348,7 +348,7 @@ async function handleSuccessResponse(
       // For ctrlnode agents, taskFolderName already contains the "tasks/" prefix so use
       // ctrlnodePath directly (not ctrlnodePath/tasks) to avoid a double "tasks/tasks/" path.
       const sessionWorkspace = isAgentInCtrlnode(targetId) ? ctrlnodePath : agentInfo.workspace;
-      logger.info('dispatch_task.starting_poller', { taskId: taskIdForSession, folderForLog, sessionWorkspace });
+      logger.debug('dispatch_task.starting_poller', { taskId: taskIdForSession, folderForLog, sessionWorkspace });
       startMainSessionPolling(targetId, taskIdForSession, folderForLog, sessionWorkspace, ctx.sendToSaas.bind(ctx), setAgentRunning);
     }
   }
@@ -369,7 +369,7 @@ async function handleSuccessResponse(
 
   ctx.sendToSaas({ action: 'agent_message', agentId: targetId, taskId: contextTaskId, message: resultText });
 
-  logger.info(intentType ? 'intent.response' : 'tool.response', {
+  logger.debug(intentType ? 'intent.response' : 'tool.response', {
     agentId: targetId, tool: toolName, resultPreview: text.slice(0, 1024), executionId, contextTaskId,
   });
 

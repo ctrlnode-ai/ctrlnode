@@ -94,7 +94,7 @@ export function startWatcher(agentId: string, workspaceDir: string, onEvent: Fil
 
   watcher.on('add',    fp => onEvent(agentId, workspaceDir, 'add',    fp));
   watcher.on('change', fp => onEvent(agentId, workspaceDir, 'change', fp));
-  watcher.on('ready',  () => logger.info('watcher_ready', { agentId, polling: usePolling, workspaceDir }));
+  watcher.on('ready',  () => logger.debug('watcher_ready', { agentId, polling: usePolling, workspaceDir }));
   watcher.on('error',  (err: Error) => logger.error('watcher_error', { agentId, message: err.message }));
 
   activeWatchers[agentId] = watcher;

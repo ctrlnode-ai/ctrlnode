@@ -176,15 +176,15 @@ echo ""
 
 # --- optional: run the bridge now ---
 if [ -t 1 ] && [ -e /dev/tty ]; then
-  printf "Do you want to run ctrlnode-bridge now? (Y/n): " > /dev/tty
+  printf "Do you want to run ctrlnode-bridge now? (y/N): " > /dev/tty
   read -r run_now < /dev/tty
   case "$run_now" in
-    n|N|no|No)
-      echo "You can start it later with: ctrlnode-bridge"
-      ;;
-    *)
+    y|Y|yes|Yes)
       echo "Starting ctrlnode-bridge..."
       AGENTS_FOLDER="$WORKSPACE_ROOT" "$DEST"
+      ;;
+    *)
+      echo "You can start it later with: ctrlnode-bridge"
       ;;
   esac
 fi

@@ -50,4 +50,9 @@ export interface IProvider {
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null;
   /** Base dir for create_workspace. Returns null to acknowledge without creating. */
   resolveWorkspaceCreationBase(useCtrlnode: boolean): string | null;
+  /**
+   * Optional: returns available model IDs for this provider by querying its API.
+   * Returns an empty array when not supported or the API call fails.
+   */
+  listModels?(): Promise<string[]>;
 }

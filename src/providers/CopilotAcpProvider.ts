@@ -13,6 +13,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery';
 import { logger } from '../logger';
 import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils';
+import { COPILOT_KNOWN_MODELS } from './knownModels';
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';
@@ -28,6 +29,7 @@ export class CopilotAcpProvider implements IProvider {
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
     const agentInfo = discoveredAgents[params.agentId];
+    if (agentInfo?.model) callbacks.onModelDiscovered?.(agentInfo.model);
     const effectivePrompt = agentInfo?.description
       ? `${agentInfo.description}\n\n---\n\n${params.prompt}`
       : params.prompt;
@@ -37,6 +39,7 @@ export class CopilotAcpProvider implements IProvider {
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     // ACP does not support persistent sessions yet — open a new session each time.
     const agentInfo = discoveredAgents[params.agentId];
+    if (agentInfo?.model) callbacks.onModelDiscovered?.(agentInfo.model);
     const effectivePrompt = agentInfo?.description
       ? `${agentInfo.description}\n\n---\n\n${params.message}`
       : params.message;
@@ -65,6 +68,12 @@ export class CopilotAcpProvider implements IProvider {
   resolveWorkspaceCreationBase(_useCtrlnode: boolean): string | null {
     // Copilot ACP does not support SaaS-initiated workspace creation.
     return null;
+  }
+
+  async listModels(): Promise<string[]> {
+    // GitHub Copilot model selection via its token-exchange API is complex.
+    // Return a curated static list of models available in Copilot as of 2025-2026.
+    return COPILOT_KNOWN_MODELS;
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -148,10 +157,14 @@ export class CopilotAcpProvider implements IProvider {
         const mapped = mapAcpUpdate(taskId, update);
         if (mapped) {
           callbacks.onStream(mapped);
-          // Stream each text chunk to the Activity panel in real time.
           if (mapped.kind === 'text_chunk' && mapped.text) {
+            // Stream each text chunk to the Activity panel in real time.
             accumulatedText += mapped.text;
             callbacks.onMessage(mapped.text);
+          } else if (mapped.kind === 'tool_call') {
+            // Show tool call titles as activity so the user sees progress.
+            const title = update.title || update.rawInput?.description || update.rawInput?.command || 'tool call';
+            callbacks.onMessage(`→ ${title}\n`);
           }
         }
       },

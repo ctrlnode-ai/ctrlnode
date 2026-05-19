@@ -89,9 +89,8 @@ Write-Host "Docs:              https://github.com/$REPO#readme"
 Write-Host ""
 
 # --- optional: run the bridge now ---
-$runNow = Read-Host "Do you want to run ctrlnode-bridge now? (Y/n)"
-if (-not $runNow.Trim()) { $runNow = 'y' }
-if ($runNow.Trim().ToLower() -ne 'n') {
+$runNow = Read-Host "Do you want to run ctrlnode-bridge now? (y/N)"
+if ($runNow.Trim().ToLower() -eq 'y') {
   $bridgePath = Join-Path $InstallDir $BINARY_NAME
   Write-Host "Starting ctrlnode-bridge..." -ForegroundColor Cyan
   Start-Process -FilePath $bridgePath -WorkingDirectory $WorkspaceRoot
