@@ -27,7 +27,7 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 ## What's new in v2.1
 
 - **Routines** — schedule recurring tasks on a cron-style cadence; agents run automatically and report back through the same live stream
-- **Workflows with triggers** — build multi-step agent workflows that start on a schedule, a webhook, or when another workflow completes
+- **Multi-agent Workflows** — build multi-step agent workflows that start on a schedule, a webhook, or when another workflow completes
 - **Model selection** — choose the exact AI model per agent (claude-sonnet-4-6, gpt-5.5, gemini-3.1-pro, …); the Bridge reports available models on connect and the UI surfaces them as a searchable drop-down
 
 ---
@@ -81,7 +81,7 @@ PROVIDERS=claude-sdk,copilot,cursor
 
 - **Remote task launch** — write a task in the web UI, run it on your machine from anywhere; no SSH, no VPN, no open ports
 - **Routines** — schedule recurring agent tasks (cron-style); runs are tracked and streamed like any manual task
-- **Workflows with triggers** — visual workflow designer; wire steps together, set a time or event trigger, deploy in one click
+- **Multi-agent Workflows** — visual workflow designer; wire steps together, set a time or event trigger, deploy in one click
 - **Live output stream** — watch the agent work line by line from your browser in real time
 - **Outbound-only Bridge** — single lightweight binary, one outbound WebSocket; NAT, Docker, and headless VPS all work out of the box
 - **Multi-provider** — Claude, Copilot, Gemini, Codex, Cursor, OpenClaw from one Bridge process; mix providers across steps
@@ -157,7 +157,9 @@ Your agents appear in the web UI automatically. Create a task, assign it, and wa
 
 ---
 
-## Workflows — visual multi-step automation
+## Multi-agent Workflows — visual automation
+
+![Multi-agent Workflows canvas](assets/workflows.png)
 
 Design a workflow in the drag-and-drop canvas: drop agent nodes, wire the output of one step into the input of the next, set a **trigger** (schedule or event), and deploy. Each step runs on whichever agent and provider you choose — Claude for one step, Codex for the next.
 
@@ -168,7 +170,17 @@ Design a workflow in the drag-and-drop canvas: drop agent nodes, wire the output
 
 ---
 
+## Kanban — ship tasks like a product team
+
+![Kanban board](assets/kanban.png)
+
+Write a task, assign an agent, and drop it on the board. CTRL NODE automatically moves it through **BACKLOG → INBOX → ACTIVE → DONE** as the Bridge dispatches it to your agents and they report back in real time.
+
+---
+
 ## Routines — recurring scheduled tasks
+
+![Routines calendar view](assets/routines.png)
 
 Create a Routine to run a task on a repeating schedule (daily summary, nightly refactor, weekly report…). The agent receives the task exactly as if you sent it manually — same live stream, same output artifacts, same status tracking.
 
