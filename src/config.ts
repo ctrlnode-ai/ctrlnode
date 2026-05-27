@@ -44,6 +44,9 @@ try {
     process.env[key] = val;
   }
   _dotenvPath = envFile;
+  console.log(`Reading config from: ${envFile}`);
+  const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
+  console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
 } catch { /* no .env file — fine */ }
 
 // ── WebSocket / SaaS ──────────────────────────────────────────────────────────
@@ -197,7 +200,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.0';
+export const BRIDGE_VERSION = 'v2026.2.2';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
