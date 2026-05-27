@@ -6,8 +6,9 @@ import { CopilotAcpProvider } from './CopilotAcpProvider';
 import { GeminiAcpProvider } from './GeminiAcpProvider';
 import { CodexSdkProvider } from './CodexSdkProvider';
 import { CursorSdkProvider } from './CursorSdkProvider';
+import { HermesAcpProvider } from './HermesAcpProvider';
 
-const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor']);
+const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes']);
 
 export function createProvider(name: string): IProvider {
   if (!KNOWN_PROVIDERS.has(name)) {
@@ -20,6 +21,7 @@ export function createProvider(name: string): IProvider {
   if (name === 'gemini')       return new GeminiAcpProvider();
   if (name === 'codex')        return new CodexSdkProvider();
   if (name === 'cursor')       return new CursorSdkProvider();
+  if (name === 'hermes')       return new HermesAcpProvider();
   return new OpenClawProvider();
 }
 

@@ -15,10 +15,16 @@ import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } fro
 import { AgentSummary } from '../types';
 import {
   CODEX_TIMEOUT_MINUTES,
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config';
 import { logger } from '../logger';
+import {
+  augmentPromptForRepoMode,
+  resolveRepoDispatchSpawn,
+  resolveTaskPaths,
+  type RepoDispatchSpawnContext,
+} from './repoDispatchContext';
 import { discoveredAgents } from '../agentDiscovery';
 import { getCodexAgentHome } from '../filesystemConfigHandlers';
 import { setAgentRunning } from '../websocket';
@@ -44,7 +50,24 @@ export class CodexSdkProvider implements IProvider {
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
     const agentInfo = discoveredAgents[params.agentId];
-    await this._run(params.taskId, params.prompt, callbacks, params.agentId, params.taskFolderName, agentInfo?.description, agentInfo?.model);
+    const dispatch = resolveRepoDispatchSpawn(params, CTRLNODE_ROOT);
+    const prompt = augmentPromptForRepoMode(params.prompt, params);
+    logger.info('codex_sdk.repo_mode', {
+      taskId: params.taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd: dispatch.spawnCwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+    await this._run(
+      params.taskId,
+      prompt,
+      callbacks,
+      params.agentId,
+      params.taskFolderName,
+      agentInfo?.description,
+      agentInfo?.model,
+      dispatch,
+    );
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
@@ -63,7 +86,7 @@ export class CodexSdkProvider implements IProvider {
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
     // Incoming paths from SaaS already include the "tasks/" prefix — return
     // ctrlnode root so path.join(base, relPath) resolves correctly.
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -78,6 +101,12 @@ export class CodexSdkProvider implements IProvider {
   async listModels(): Promise<string[]> {
     return fetchOpenAiModels();
   }
+
+  async isAvailable(): Promise<boolean> {
+    const { checkBinaryExists } = await import('./providerHealthUtils');
+    return checkBinaryExists('codex');
+  }
+
   // ── Internal ────────────────────────────────────────────────────────────────
 
   private async _run(
@@ -88,18 +117,20 @@ export class CodexSdkProvider implements IProvider {
     taskFolderName?: string,
     agentDescription?: string,
     agentModel?: string,
+    dispatch?: RepoDispatchSpawnContext,
   ): Promise<void> {
-    // cwd = AGENTS_CTRLNODE_ROOT so relative paths in prompts like
-    // "tasks/codex/05-05/{id}/output/" resolve correctly without duplication.
-    const providerTasksRoot = resolveProjectHome(taskFolderName);
-    fs.mkdirSync(providerTasksRoot, { recursive: true });
-    const spawnCwd = AGENTS_CTRLNODE_ROOT;
+    const { taskFolder, outputFolder } = resolveTaskPaths(taskFolderName, taskId);
+    const ctx = dispatch ?? {
+      isRepoMode: false,
+      taskFolder,
+      outputFolder,
+      spawnCwd: CTRLNODE_ROOT,
+      taskLogAbsolutePath: null,
+      extraDirectories: [taskFolder],
+    };
+    const { spawnCwd, extraDirectories } = ctx;
+    fs.mkdirSync(spawnCwd, { recursive: true });
     const timeoutMs = CODEX_TIMEOUT_MINUTES * 60_000;
-
-    // taskFolder = full absolute path to this task's folder
-    const taskFolder = taskFolderName
-      ? path.join(AGENTS_CTRLNODE_ROOT, taskFolderName)
-      : providerTasksRoot;
 
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
@@ -207,7 +238,7 @@ export class CodexSdkProvider implements IProvider {
         // Never ask for approval — equivalent to --approval-mode yolo in CLI providers
         approvalPolicy: 'never',
         // Ensure the task output folder is writable even if outside cwd
-        additionalDirectories: [taskFolder],
+        additionalDirectories: extraDirectories,
         // Pass the model when configured; if undefined the CLI uses its own
         // default (from config.toml or the CODEX_DEFAULT_MODEL env var).
         ...(effectiveModel ? { model: effectiveModel } : {}),
@@ -398,15 +429,15 @@ function ensureWorkspaceTrusted(codexHomePath: string): void {
     if (!fs.existsSync(configPath)) return;
     const content = fs.readFileSync(configPath, 'utf8');
     let extra = '';
-    if (!content.toLowerCase().includes(AGENTS_CTRLNODE_ROOT.toLowerCase())) {
-      extra += `\n[projects.'${AGENTS_CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
+    if (!content.toLowerCase().includes(CTRLNODE_ROOT.toLowerCase())) {
+      extra += `\n[projects.'${CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
     }
     if (!content.toLowerCase().includes('[windows]')) {
       extra += `\n[windows]\nsandbox = "unelevated"\n`;
     }
     if (extra) {
       fs.appendFileSync(configPath, extra, 'utf8');
-      logger.info('codex_agent_home.workspace_trusted', { codexHomePath, root: AGENTS_CTRLNODE_ROOT });
+      logger.info('codex_agent_home.workspace_trusted', { codexHomePath, root: CTRLNODE_ROOT });
     }
   } catch (e) {
     logger.warn('codex_agent_home.workspace_trust_failed', { codexHomePath, err: String(e) });

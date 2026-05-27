@@ -3,7 +3,6 @@ import { BridgeMessage } from './types';
 import { HandlerContext } from './handlerContext';
 import { discoveredAgents, agentStatuses } from './agentDiscovery';
 import { resolveTargetAgentId } from './agentRouting';
-import { PROVIDERS, AGENTS_CTRLNODE_ROOT } from './config';
 import { getIntentProviderMethod } from './intentDispatchPolicy';
 import { setAgentRunning } from './websocket';
 import { handleInvokeTool } from './openclawInvoker';
@@ -19,17 +18,6 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
   const providerMethod = getIntentProviderMethod(intentType);
   const targetId = resolveTargetAgentId(msg.agentId);
   let agentInfo = discoveredAgents[targetId!];
-
-  // For non-OpenClaw SDK providers (Cursor, Gemini, Codex, etc.), the agent may not
-  // yet be in discoveredAgents if sync_cursor_agents hasn't arrived since the last
-  // Bridge restart. Auto-register a synthetic entry so dispatch_task can proceed;
-  // the SDK runner will create the agent in the provider on first use.
-  if (!agentInfo && !PROVIDERS.includes('openclaw') && intentType === 'dispatch_task' && targetId) {
-    logger.warn('intent.agent_not_in_registry.auto_register', { agentId: targetId, providers: PROVIDERS });
-    agentInfo = { workspace: AGENTS_CTRLNODE_ROOT, name: targetId, model: '', role: '', emoji: '', description: '' };
-    discoveredAgents[targetId] = agentInfo;
-    agentStatuses[targetId] = 'running';
-  }
 
   if (!agentInfo) {
     ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'AGENT_NOT_FOUND' });
@@ -54,6 +42,12 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     }
 
     const taskFolderName = parsedArgs?.taskFolderName ?? msg.taskFolderName;
+    const taskMode = parsedArgs?.taskMode as string | undefined;
+    const repoPath = parsedArgs?.repoPath as string | undefined;
+    const taskLogRelativePath = parsedArgs?.taskLogRelativePath as string | undefined;
+
+    // In repo mode, use the repository root as the working directory instead of the agent workspace.
+    const workingDir = (taskMode === 'repo' && repoPath) ? repoPath : agentInfo.workspace;
 
     // Mark the agent as running immediately so the UI reflects activity from the start.
     setAgentRunning(targetId!);
@@ -64,11 +58,14 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
           agentId: targetId!,
           taskId: contextTaskId || '',
           prompt,
-          workingDir: agentInfo.workspace,
+          workingDir,
           tools: parsedArgs?.tools,
           taskFolderName,
           skipSessionWipe: parsedArgs?.skipSessionWipe,
           executionId,
+          taskMode,
+          repoPath,
+          taskLogRelativePath,
         },
         {
           onStream: (event) => {

@@ -28,6 +28,8 @@ export interface AgentInfo {
   description?: string;
   /** The provider that discovered this agent (e.g. "cursor", "copilot", "openclaw"). */
   provider?: string;
+  /** True when discovered from local filesystem (e.g. ~/.hermes/profiles/), not synced from CtrlNode DB. */
+  fromFilesystem?: boolean;
 }
 
 /**
@@ -102,6 +104,12 @@ export interface BridgeMessage {
   contextTaskId?: string;
   /** When true, operations target the ctrlnode root instead of the agent workspace. */
   useCtrlnode?: boolean;
+  /** When true, operations target BASE_PATH (the bridge home root) instead of any agent workspace. */
+  useBasePath?: boolean;
+  /** With `useBasePath`, list immediate child files and directories (file picker). Default: directories only. */
+  shallowIncludeFiles?: boolean;
+  /** With `useBasePath`, recursively walk the tree (files + dirs) for zip/download listing. */
+  recursive?: boolean;
   /** When `base64`, `content` is decoded to bytes before writing; otherwise UTF-8 text. */
   contentEncoding?: 'utf8' | 'base64';
   /** Folder name or path for single-folder operations such as create_workspace or delete_agent_folders. */
@@ -116,6 +124,10 @@ export interface BridgeMessage {
   model?: string;
   /** Agent workspace path for update_agent_config. */
   workspace?: string;
+  /** Agent role for update_agent_config / sync_*_agents. */
+  role?: string;
+  /** Agent instructions (description) for update_agent_config / sync_*_agents. */
+  description?: string;
   /** Task folder name for check_task_output and related polling operations. */
   taskFolderName?: string;
   /** Predecessor agent OpenClaw ID for atomic pipeline activation. */

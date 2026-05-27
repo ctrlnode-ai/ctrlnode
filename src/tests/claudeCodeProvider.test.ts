@@ -5,15 +5,13 @@ import fs from 'fs';
 import os from 'os';
 import * as childProcess from 'child_process';
 import { ClaudeCodeProvider } from '../providers/ClaudeCodeProvider';
-import { AGENTS_CTRLNODE_ROOT, resolveProjectHome } from '../config';
+import { CTRLNODE_ROOT, resolveProjectHome } from '../config';
 
-/** Ctrlnode workspace root (base for joining taskFolderName). */
-const CTRLNODE_ROOT = AGENTS_CTRLNODE_ROOT;
 
 describe('ClaudeCodeProvider.resolveFilesystemBase', () => {
-  test('returns AGENTS_CTRLNODE_ROOT regardless of agentId and useCtrlnode', () => {
+  test('returns CTRLNODE_ROOT regardless of agentId and useCtrlnode', () => {
     const provider = new ClaudeCodeProvider();
-    const expected = AGENTS_CTRLNODE_ROOT;
+    const expected = CTRLNODE_ROOT;
     expect(provider.resolveFilesystemBase('any-agent', true)).toBe(expected);
     expect(provider.resolveFilesystemBase('any-agent', false)).toBe(expected);
     expect(provider.resolveFilesystemBase(undefined, false)).toBe(expected);
@@ -135,7 +133,7 @@ describe('ClaudeCodeProvider.dispatchTask', () => {
     const pIdx = spawnArgs.indexOf('-p');
     expect(pIdx).toBeGreaterThanOrEqual(0);
     // -p must be the short fixed instruction, not the original prompt
-    expect(spawnArgs[pIdx + 1]).toContain('piped input');
+    expect(spawnArgs[pIdx + 1]).toContain('stdin');
     // --add-dir must point to the task folder
     const addDirIdx = spawnArgs.indexOf('--add-dir');
     expect(addDirIdx).toBeGreaterThanOrEqual(0);

@@ -32,12 +32,16 @@ import { startWatcher, stopWatcher, processFileEvent } from './watcher';
 import { handleMessage } from './messageHandlers';
 import { logger } from './logger';
 import { IProvider } from './providers/IProvider';
+import { HermesProvider } from './providers/HermesProvider';
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
 let ws:            WebSocket | null = null;
 let isConnected    = false;
 let activeProvider: IProvider | null = null;
+
+/** Last-known provider health snapshot — used to send deltas on heartbeat. */
+let lastProviderHealth: Record<string, boolean> = {};
 
 let heartbeatTimer:        ReturnType<typeof setInterval>  | null = null;
 let reconnectTimer:        ReturnType<typeof setTimeout>   | null = null;
@@ -121,12 +125,50 @@ export function setAgentRunning(agentId: string): void {
   }, AGENT_IDLE_RESET_MS);
 }
 
+// ── Provider health ───────────────────────────────────────────────────────────
+
+/**
+ * Runs health checks on all sub-providers of a MultiProvider (or single provider)
+ * and sends a `provider_health` message with any changes since last check.
+ * On first call sends the full map (all entries, including healthy ones).
+ */
+async function checkAndSendProviderHealth(isFirstCheck: boolean): Promise<void> {
+  if (!activeProvider) return;
+  const mp = activeProvider as any;
+  if (typeof mp.checkAllProviders !== 'function') return;
+
+  try {
+    const health: Record<string, boolean> = await mp.checkAllProviders();
+    const delta: Record<string, boolean> = {};
+    let hasChanges = false;
+
+    for (const [name, available] of Object.entries(health)) {
+      if (isFirstCheck || lastProviderHealth[name] !== available) {
+        delta[name] = available;
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      lastProviderHealth = { ...health };
+      const unhealthy = Object.entries(health).filter(([, v]) => !v).map(([k]) => k);
+      logger.info('provider_health_sent', {
+        delta: Object.keys(delta).join(',') || 'none',
+        unhealthy: unhealthy.join(',') || 'none',
+      });
+      sendToSaas({ action: 'provider_health', providerHealth: isFirstCheck ? health : delta });
+    }
+  } catch (err: any) {
+    logger.warn('provider_health_check_failed', { error: err?.message });
+  }
+}
+
 // ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 /**
  * Sends a heartbeat message to the SaaS with the current list of agent IDs,
  * an overall bridge status ("running" if any agent is active), and per-agent
- * status details.
+ * status details. Also re-checks provider health and sends a delta if anything changed.
  */
 function sendHeartbeat(): void {
   if (!isConnected) return;
@@ -139,6 +181,7 @@ function sendHeartbeat(): void {
     agentStatuses: agents.map(id => ({ id, status: agentStatuses[id] })),
     timestamp:    new Date().toISOString(),
   });
+  void checkAndSendProviderHealth(false);
 }
 
 /**
@@ -201,15 +244,28 @@ export function runSyncAgents(): void {
     return;
   }
 
-  // When OpenClaw is active, discoverAgents() is not called above, so
-  // MultiProvider's agentOwner map may never be populated for OpenClaw agents.
-  // Call it here purely for the side-effect of warming ownership — results are
-  // intentionally discarded; syncAgentDiscovery below handles reporting.
+  // When OpenClaw is active: warm ownership map (discard results).
+  // Also merge Hermes profiles not yet in discoveredAgents so they appear
+  // as unregistered agents in the UI.
   if (activeProvider) {
     activeProvider.discoverAgents().catch((err) => {
       logger.warn('sync_agents.ownership_warm_failed', { error: err?.message });
     });
   }
+  new HermesProvider().discoverAgents().then((summaries) => {
+      let changed = false;
+      for (const s of summaries) {
+        if (!discoveredAgents[s.id] && !purgedAgentIds.has(s.id)) {
+          discoveredAgents[s.id] = { workspace: s.workspace, name: s.name, model: s.model, role: s.role, emoji: s.emoji, description: s.description, provider: s.provider, fromFilesystem: true };
+          agentStatuses[s.id] = 'idle';
+          changed = true;
+          logger.debug('sync_agents.hermes_profile_discovered', { id: s.id });
+        }
+      }
+      if (changed) sendToSaas({ action: 'agent_update', version: BRIDGE_VERSION, agents: buildAgentSummaries() });
+    }).catch((err) => {
+      logger.warn('sync_agents.hermes_discover_failed', { error: err?.message });
+    });
 
   syncAgentDiscovery({
     onAgentAdded(id, info) {
@@ -324,6 +380,9 @@ export function connect(provider?: IProvider): void {
       logger.info('handshake_sent', { providers: PROVIDERS });
     }
     sendToSaas(hs);
+
+    // Async: run provider health checks and send providerHealth as a follow-up message.
+    void checkAndSendProviderHealth(true);
 
     // Async: query each active provider for its available models and forward to SaaS.
     // This must not block the handshake or the message loop.
