@@ -19,7 +19,7 @@
 // with a user-friendly message if required files are missing.
 import './config';
 
-import { PROVIDERS, DOTENV_PATH } from './config';
+import { PROVIDERS, DOTENV_PATH, ensurePairingToken } from './config';
 import { createProviders } from './providers/factory';
 import { MultiProvider } from './providers/MultiProvider';
 import { runSyncAgents, connect } from './websocket';
@@ -32,7 +32,7 @@ const _buildTime = typeof BUILD_TIME !== 'undefined' ? BUILD_TIME : 'dev';
 
 // ── Startup banner ────────────────────────────────────────────────────────────
 
-console.log(`CtrlNode.ai Bridge  built ${_buildTime}  providers: ${PROVIDERS.join(',')}  .env: ${DOTENV_PATH ?? 'none'}`);
+console.log(`ctrlnode-bridge  built ${_buildTime}`);
 
 // ── Keepalive ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +45,8 @@ const keepalive = setInterval(() => {}, 1_000);
 if (keepalive.unref) keepalive.unref();
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+await ensurePairingToken();
 
 const rawProviders = createProviders(PROVIDERS);
 const provider = rawProviders.length === 1 ? rawProviders[0] : new MultiProvider(rawProviders);

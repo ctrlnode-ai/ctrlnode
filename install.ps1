@@ -11,10 +11,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $REPO        = "ctrlnode-ai/ctrlnode"
-$BINARY_NAME = "ctrlnode-bridge.exe"
-$ASSET       = "ctrlnode-bridge.exe"
+$BINARY_NAME = "ctrlnode.exe"
+$ASSET       = "ctrlnode.exe"
 $DEFAULT_DIR = "$env:LOCALAPPDATA\Programs\ctrlnode"
-$DEFAULT_WORKSPACE =  $env:USERPROFILE 
+$DEFAULT_WORKSPACE = $env:USERPROFILE
 
 Write-Host ""
 Write-Host "CtrlNode Bridge Installer" -ForegroundColor Cyan
@@ -33,8 +33,7 @@ $workspaceAnswer = Read-Host "Workspace parent folder [$DEFAULT_WORKSPACE]  "
 $WorkspaceRoot = if ($workspaceAnswer.Trim()) { $workspaceAnswer.Trim() } else { $DEFAULT_WORKSPACE }
 Write-Host "  Workspace: $WorkspaceRoot" -ForegroundColor Gray
 
-# Persist the workspace setting so the bridge can be started with just `ctrlnode-bridge`.
-[System.Environment]::SetEnvironmentVariable('AGENTS_FOLDER', $WorkspaceRoot, 'User')
+[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
 
 # --- get latest release tag ---
 Write-Host ""
@@ -61,7 +60,14 @@ $client.DownloadFile($downloadUrl, $tmpFile)
 # --- install ---
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $dest = Join-Path $InstallDir $BINARY_NAME
-if (Test-Path $dest) { Remove-Item $dest -Force }
+if (Test-Path $dest) {
+  Get-Process | Where-Object { $_.Path -eq $dest } | ForEach-Object {
+    Write-Host "  Stopping running instance (PID $($_.Id))..." -ForegroundColor Yellow
+    Stop-Process -Id $_.Id -Force
+    Start-Sleep -Milliseconds 500
+  }
+  Remove-Item $dest -Force
+}
 Move-Item $tmpFile $dest -Force
 
 Write-Host ""
@@ -80,7 +86,7 @@ $env:PATH = "$InstallDir;$env:PATH"
 
 Write-Host ""
 Write-Host "Next: start the Bridge:" -ForegroundColor Cyan
-Write-Host '  ctrlnode-bridge'
+Write-Host "  ctrlnode"
 Write-Host ""
 Write-Host "Workspace: $WorkspaceRoot"
 Write-Host "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
@@ -89,9 +95,9 @@ Write-Host "Docs:              https://github.com/$REPO#readme"
 Write-Host ""
 
 # --- optional: run the bridge now ---
-$runNow = Read-Host "Do you want to run ctrlnode-bridge now? (y/N)"
-if ($runNow.Trim().ToLower() -eq 'y') {
-  $bridgePath = Join-Path $InstallDir $BINARY_NAME
-  Write-Host "Starting ctrlnode-bridge..." -ForegroundColor Cyan
-  Start-Process -FilePath $bridgePath -WorkingDirectory $WorkspaceRoot
+$runNow = Read-Host "Do you want to run ctrlnode now? (Y/n)"
+if ($runNow.Trim().ToLower() -ne 'n') {
+  Write-Host "Starting ctrlnode..." -ForegroundColor Cyan
+  $env:BASE_PATH = $WorkspaceRoot
+  & $dest
 }

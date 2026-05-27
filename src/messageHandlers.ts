@@ -24,7 +24,7 @@ import {
 import { handleIntentAction, handleInvokeTool } from './intentHandlers';
 
 /** Actions that only make sense for the OpenClaw provider */
-const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'update_agent_config', 'invoke_tool', 'init_ping']);
+const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'invoke_tool', 'init_ping']);
 
 export type { HandlerContext, SendFn } from './handlerContext';
 
@@ -115,6 +115,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'sync_claude_sdk_agents':
       handleSyncProviderAgents('claude-sdk', msg, ctx);
+      break;
+    case 'sync_hermes_agents':
+      handleSyncProviderAgents('hermes', msg, ctx);
       break;
     default:
       break;

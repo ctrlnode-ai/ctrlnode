@@ -16,14 +16,17 @@ import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } fro
 import { AgentSummary } from '../types';
 import {
   CURSOR_TIMEOUT_MINUTES,
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config';
 import { discoveredAgents } from '../agentDiscovery';
 import { logger } from '../logger';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
 import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
 import { CURSOR_KNOWN_MODELS } from './knownModels';
 import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded';
+import { SQLITE3_NATIVE_B64 } from './cursorSqlite3NativeEmbedded';
+import { SQLITE3_JS_FILES } from './cursorSqlite3JsEmbedded';
 
 /**
  * Resolves what to spawn for the cursor SDK runner.
@@ -32,16 +35,87 @@ import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded';
  * Always spawns Node.js. Prefer a sibling cursor-sdk-runner.mjs next to the binary;
  * if absent, the embedded source is extracted to /tmp on first use.
  */
+// Tmp dir where the runner .mjs is extracted — sqlite3 node_modules lives here too.
+let _runnerTmpDir: string | undefined;
+
+function ensureRunnerTmpDir(): string {
+  if (_runnerTmpDir) return _runnerTmpDir;
+  _runnerTmpDir = path.join(os.tmpdir(), 'ctrlnode-cursor-runner');
+  fs.mkdirSync(_runnerTmpDir, { recursive: true });
+  return _runnerTmpDir;
+}
+
+function ensureSqlite3NextToRunner(runnerDir: string): void {
+  // ESM resolver walks up from the importer directory looking for node_modules.
+  // Place sqlite3 as a proper package next to the runner so it resolves correctly.
+  // NODE_PATH does not work for ESM; this sibling node_modules approach does.
+  const pkgDir = path.join(runnerDir, 'node_modules', 'sqlite3');
+
+  // First preference: real sqlite3 in node_modules next to the exe or in cwd.
+  const binDir = path.dirname(process.execPath);
+  const realSqlite3 = [
+    path.join(binDir, 'node_modules', 'sqlite3'),
+    path.join(process.cwd(), 'node_modules', 'sqlite3'),
+  ].find(d => fs.existsSync(path.join(d, 'build', 'Release', 'node_sqlite3.node')));
+
+  if (realSqlite3) {
+    if (!fs.existsSync(path.join(pkgDir, 'build', 'Release', 'node_sqlite3.node'))) {
+      _copySqlite3Package(realSqlite3, pkgDir);
+      logger.info('cursor_sdk.sqlite3_copied', { from: realSqlite3 });
+    }
+    return;
+  }
+
+  // Second preference: extract the embedded .node binary.
+  if (!fs.existsSync(path.join(pkgDir, 'build', 'Release', 'node_sqlite3.node'))) {
+    _extractSqlite3Binding(pkgDir);
+  }
+}
+
+function _copySqlite3Package(srcPkgDir: string, dstPkgDir: string): void {
+  // Copy the full sqlite3 package recursively (JS files + binding).
+  const copyDir = (src: string, dst: string) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, entry.name);
+      const d = path.join(dst, entry.name);
+      if (entry.isDirectory()) {
+        copyDir(s, d);
+      } else {
+        fs.copyFileSync(s, d);
+      }
+    }
+  };
+  copyDir(srcPkgDir, dstPkgDir);
+}
+
+function _extractSqlite3Binding(pkgDir: string): void {
+  if (!SQLITE3_NATIVE_B64) return;
+  // We only have the .node binary embedded — copy the JS wrapper files from
+  // the embedded sqlite3 JS source alongside it.
+  for (const [relPath, content] of Object.entries(SQLITE3_JS_FILES)) {
+    const dest = path.join(pkgDir, relPath);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content, 'utf8');
+  }
+  const bindingPath = path.join(pkgDir, 'build', 'Release', 'node_sqlite3.node');
+  fs.mkdirSync(path.dirname(bindingPath), { recursive: true });
+  fs.writeFileSync(bindingPath, Buffer.from(SQLITE3_NATIVE_B64, 'base64'));
+  logger.info('cursor_sdk.sqlite3_extracted', { path: bindingPath });
+}
+
 function getRunnerSpawnArgs(): { cmd: string; args: string[] } {
   const binDir = path.dirname(process.execPath);
   const sibling = path.join(binDir, 'cursor-sdk-runner.mjs');
   let runnerPath = sibling;
   if (!fs.existsSync(sibling)) {
-    const tmp = path.join(os.tmpdir(), 'ctrlnode-cursor-sdk-runner.mjs');
+    // Extract runner to a dedicated tmp dir so sqlite3 node_modules can live next to it.
+    const runnerDir = ensureRunnerTmpDir();
+    runnerPath = path.join(runnerDir, 'cursor-sdk-runner.mjs');
     // Always overwrite — the cached file may be stale from a previous binary version.
-    fs.writeFileSync(tmp, CURSOR_SDK_RUNNER_SOURCE, 'utf8');
-    logger.info('cursor_sdk.runner_extracted', { path: tmp });
-    runnerPath = tmp;
+    fs.writeFileSync(runnerPath, CURSOR_SDK_RUNNER_SOURCE, 'utf8');
+    logger.info('cursor_sdk.runner_extracted', { path: runnerPath });
+    ensureSqlite3NextToRunner(runnerDir);
   }
   const isWindows = process.platform === 'win32';
   return { cmd: isWindows ? 'node.exe' : 'node', args: [runnerPath] };
@@ -58,7 +132,16 @@ export class CursorSdkProvider implements IProvider {
   }
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
-    await this._run(params.taskId, params.prompt, params.workingDir, callbacks, params.taskFolderName, params.agentId);
+    const providerTasksRoot = resolveProjectHome(params.taskFolderName);
+    const dispatch = resolveRepoDispatchSpawn(params, providerTasksRoot);
+    const prompt = augmentPromptForRepoMode(params.prompt, params);
+    logger.info('cursor_sdk.repo_mode', {
+      taskId: params.taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd: dispatch.spawnCwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+    await this._run(params.taskId, prompt, dispatch.spawnCwd, callbacks, params.taskFolderName, params.agentId);
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
@@ -78,7 +161,7 @@ export class CursorSdkProvider implements IProvider {
       const { cmd: runnerCmd, args: runnerArgs } = getRunnerSpawnArgs();
       logger.info('cursor_sdk.spawn', { cmd: runnerCmd, args: runnerArgs });
       const proc = spawn(runnerCmd, runnerArgs, {
-        cwd: AGENTS_CTRLNODE_ROOT,
+        cwd: CTRLNODE_ROOT,
         env: { ...process.env },
         stdio: ['pipe', 'pipe', 'inherit'],
         shell: false,
@@ -104,7 +187,7 @@ export class CursorSdkProvider implements IProvider {
   }
 
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -132,26 +215,21 @@ export class CursorSdkProvider implements IProvider {
   private async _run(
     taskId: string,
     prompt: string,
-    workingDir: string | undefined,
+    spawnCwd: string,
     callbacks: TaskCallbacks,
     taskFolderName?: string,
     agentId?: string,
   ): Promise<void> {
-    // Run from the project-level home (tasks/{project}) so Cursor has full project
-    // context as its working directory. workspace_path is an OpenClaw concept and
-    // does not apply here.
-    const providerTasksRoot = resolveProjectHome(taskFolderName);
-    fs.mkdirSync(providerTasksRoot, { recursive: true });
+    fs.mkdirSync(spawnCwd, { recursive: true });
     const timeoutMs = CURSOR_TIMEOUT_MINUTES * 60_000;
 
-    // mcpRoot: use providerTasksRoot resolved above.
-    const mcpRoot = path.resolve(providerTasksRoot);
+    const mcpRoot = path.resolve(spawnCwd);
 
     const { cmd: runnerCmd, args: runnerArgs } = getRunnerSpawnArgs();
-    logger.info('cursor_sdk.start', { taskId, cwd: providerTasksRoot, mcpRoot, cmd: runnerCmd });
+    logger.info('cursor_sdk.start', { taskId, cwd: spawnCwd, mcpRoot, cmd: runnerCmd });
     logger.info('cursor_sdk.spawn', { cmd: runnerCmd, args: runnerArgs });
     const proc = spawn(runnerCmd, runnerArgs, {
-      cwd: providerTasksRoot,
+      cwd: spawnCwd,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'inherit'],
       shell: false,
@@ -201,7 +279,7 @@ export class CursorSdkProvider implements IProvider {
       taskId,
       agentId,
       prompt:    wrappedPrompt,
-      cwd:       providerTasksRoot,
+      cwd:       spawnCwd,
       mcpRoot,
       model:     effectiveModel,
       apiKey:    process.env.CURSOR_API_KEY ?? '',

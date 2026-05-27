@@ -3,7 +3,7 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import path from 'path';
 import { OpenClawProvider } from '../providers/OpenClawProvider';
 import { discoveredAgents } from '../agentDiscovery';
-import { ctrlnodePath, AGENTS_CTRLNODE_ROOT } from '../config';
+import { ctrlnodePath, CTRLNODE_ROOT } from '../config';
 
 const AGENT_ID = 'test-agent-1';
 const WORKSPACE = '/tmp/test-workspace';
@@ -17,10 +17,11 @@ afterEach(() => {
 });
 
 describe('OpenClawProvider.resolveFilesystemBase', () => {
-  test('returns AGENTS_CTRLNODE_ROOT when useCtrlnode=true regardless of agentId', () => {
+  test('returns openclaw ctrlnode path when useCtrlnode=true regardless of agentId', () => {
     const provider = new OpenClawProvider();
-    expect(provider.resolveFilesystemBase('any', true)).toBe(AGENTS_CTRLNODE_ROOT);
-    expect(provider.resolveFilesystemBase(undefined, true)).toBe(AGENTS_CTRLNODE_ROOT);
+    const expected = path.join(path.dirname(ctrlnodePath), 'ctrlnode');
+    expect(provider.resolveFilesystemBase('any', true)).toBe(expected);
+    expect(provider.resolveFilesystemBase(undefined, true)).toBe(expected);
   });
 
   test('returns agent workspace when useCtrlnode=false and agent exists', () => {
@@ -40,9 +41,9 @@ describe('OpenClawProvider.resolveFilesystemBase', () => {
 });
 
 describe('OpenClawProvider.resolveWorkspaceCreationBase', () => {
-  test('returns AGENTS_CTRLNODE_ROOT when useCtrlnode=true', () => {
+  test('returns openclaw dirname regardless of useCtrlnode', () => {
     const provider = new OpenClawProvider();
-    expect(provider.resolveWorkspaceCreationBase(true)).toBe(AGENTS_CTRLNODE_ROOT);
+    expect(provider.resolveWorkspaceCreationBase(true)).toBe(path.dirname(ctrlnodePath));
   });
 
   test('returns dirname of ctrlnodePath when useCtrlnode=false', () => {

@@ -9,7 +9,7 @@
 set -e
 
 REPO="ctrlnode-ai/ctrlnode"
-BINARY_NAME="ctrlnode-bridge"
+BINARY_NAME="ctrlnode"
 DEFAULT_DIR="/usr/local/bin"
 INSTALL_DIR=""
 
@@ -56,7 +56,7 @@ fi
 
 echo "  Workspace: $WORKSPACE_ROOT"
 
-# Persist workspace so ctrlnode-bridge can read it without extra flags
+# Persist workspace
 SHELL_RC=""
 if [ -f "$HOME/.bashrc" ]; then SHELL_RC="$HOME/.bashrc"
 elif [ -f "$HOME/.zshrc" ]; then SHELL_RC="$HOME/.zshrc"
@@ -64,11 +64,10 @@ elif [ -f "$HOME/.profile" ]; then SHELL_RC="$HOME/.profile"
 fi
 
 if [ -n "$SHELL_RC" ]; then
-  # Remove any previous AGENTS_FOLDER export and append fresh one
-  grep -v 'AGENTS_FOLDER' "$SHELL_RC" > "${SHELL_RC}.tmp" && mv "${SHELL_RC}.tmp" "$SHELL_RC"
-  echo "export AGENTS_FOLDER=\"$WORKSPACE_ROOT\"" >> "$SHELL_RC"
+  grep -v 'BASE_PATH' "$SHELL_RC" > "${SHELL_RC}.tmp" && mv "${SHELL_RC}.tmp" "$SHELL_RC"
+  echo "export BASE_PATH=\"$WORKSPACE_ROOT\"" >> "$SHELL_RC"
 fi
-export AGENTS_FOLDER="$WORKSPACE_ROOT"
+export BASE_PATH="$WORKSPACE_ROOT"
 
 # --- detect OS and arch ---
 OS="$(uname -s)"
@@ -79,9 +78,9 @@ case "$OS" in
     case "$ARCH" in
       x86_64)
         if grep -q avx2 /proc/cpuinfo 2>/dev/null; then
-          ASSET="ctrlnode-bridge-linux-x64"
+          ASSET="ctrlnode-linux-x64"
         else
-          ASSET="ctrlnode-bridge-linux-x64-baseline"
+          ASSET="ctrlnode-linux-x64-baseline"
         fi
         ;;
       aarch64|arm64)
@@ -96,7 +95,7 @@ case "$OS" in
     ;;
   Darwin)
     case "$ARCH" in
-      arm64)   ASSET="ctrlnode-bridge-darwin-arm64" ;;
+      arm64)   ASSET="ctrlnode-darwin-arm64" ;;
       x86_64)
         echo "ERROR: macOS Intel binary not yet available. Use Rosetta or build from source." >&2
         exit 1
@@ -148,6 +147,13 @@ fi
 mkdir -p "$INSTALL_DIR"
 DEST="${INSTALL_DIR}/${BINARY_NAME}"
 
+# Stop any running instance before replacing the binary
+if [ -f "$DEST" ]; then
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -x "$BINARY_NAME" 2>/dev/null && sleep 0.5 || true
+  fi
+fi
+
 if [ -w "$INSTALL_DIR" ]; then
   mv "$TMP_FILE" "$DEST"
 else
@@ -166,7 +172,7 @@ echo ""
 echo "✓ Installed: $DEST ($LATEST_TAG)"
 echo ""
 echo "Next: start the Bridge:"
-echo "  ctrlnode-bridge"
+echo "  ctrlnode"
 echo ""
 echo "Workspace: $WORKSPACE_ROOT"
 echo "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
@@ -176,15 +182,15 @@ echo ""
 
 # --- optional: run the bridge now ---
 if [ -t 1 ] && [ -e /dev/tty ]; then
-  printf "Do you want to run ctrlnode-bridge now? (y/N): " > /dev/tty
+  printf "Do you want to run ctrlnode now? (Y/n): " > /dev/tty
   read -r run_now < /dev/tty
   case "$run_now" in
-    y|Y|yes|Yes)
-      echo "Starting ctrlnode-bridge..."
-      AGENTS_FOLDER="$WORKSPACE_ROOT" "$DEST"
+    n|N|no|No)
+      echo "You can start it later with: ctrlnode"
       ;;
     *)
-      echo "You can start it later with: ctrlnode-bridge"
+      echo "Starting ctrlnode..."
+      BASE_PATH="$WORKSPACE_ROOT" "$DEST"
       ;;
   esac
 fi

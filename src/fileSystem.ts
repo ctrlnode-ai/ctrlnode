@@ -161,6 +161,63 @@ export function walkDir(dir: string, base = ''): FileEntry[] {
   return results;
 }
 
+/**
+ * Lists only immediate child directories of `dir` (non-recursive).
+ * Used by the SaaS folder picker (`useBasePath`) so each navigation level
+ * shows one directory tier, not the full tree from `walkDir`.
+ */
+export function listDirShallow(dir: string, base = ''): FileEntry[] {
+  const results: FileEntry[] = [];
+
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (!entry.isDirectory()) continue;
+
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    results.push({ name: entry.name, path: rel, type: 'dir' });
+  }
+
+  results.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return results;
+}
+
+/**
+ * Lists immediate child files and directories (non-recursive).
+ * Used by the SaaS focus-file picker (`useBasePath` + `shallowIncludeFiles`).
+ */
+export function listDirShallowEntries(dir: string, base = ''): FileEntry[] {
+  const results: FileEntry[] = [];
+
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    const full = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      results.push({ name: entry.name, path: rel, type: 'dir' });
+    } else {
+      let size: number | null = null;
+      try { size = fs.statSync(full).size; } catch {}
+      results.push({ name: entry.name, path: rel, type: 'file', size });
+    }
+  }
+
+  results.sort((a, b) => {
+    const aDir = a.type === 'dir';
+    const bDir = b.type === 'dir';
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return results;
+}
+
 // ── Path safety ───────────────────────────────────────────────────────────────
 
 /**

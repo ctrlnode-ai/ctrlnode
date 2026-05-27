@@ -11,9 +11,11 @@ import { resolveOpenClawConfigPath } from './configResolution';
 
 // ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
 function _findDotenv(): string | null {
+  // Prefer the installer path (~/.ctrlnode/.env) over cwd/.env so a stray
+  // .env in the Bridge repo does not override the user's workspace config.
   const candidates = [
+    path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env'),
     path.join(process.cwd(), '.env'),
-    path.join(process.env.AGENTS_FOLDER || os.homedir(), '.ctrlnode', '.env'),
     path.join(os.homedir(), '.env'),
   ];
   for (const p of candidates) {
@@ -26,13 +28,16 @@ try {
   const envFile = _findDotenv();
   if (!envFile) throw new Error('no .env');
   const raw = fs.readFileSync(envFile, 'utf8');
+  const isInstallerEnv = envFile.replace(/\\/g, '/').includes('/.ctrlnode/.env');
+  const installerOverrides = new Set(['PAIRING_TOKEN', 'SAAS_URL', 'BASE_PATH']);
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const eq = trimmed.indexOf('=');
     if (eq < 1) continue;
     const key = trimmed.slice(0, eq).trim();
-    if (key in process.env) continue; // real env wins
+    // Shell/docker may export stale vars; ~/.ctrlnode/.env from install.ps1 is authoritative.
+    if (key in process.env && !(isInstallerEnv && installerOverrides.has(key))) continue;
     let val = trimmed.slice(eq + 1).trim();
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
       val = val.slice(1, -1);
@@ -68,15 +73,11 @@ export const WATCHER_USE_POLLING = process.env.WATCHER_USE_POLLING === 'true';
 export const WATCHER_POLL_INTERVAL = parseInt(process.env.WATCHER_POLL_INTERVAL || '1000', 10);
 
 // ── Provider selection ────────────────────────────────────────────────────────
-// PROVIDERS supports comma-separated list: PROVIDERS=copilot,cursor
-// Falls back to PROVIDER (singular) for backwards compatibility.
+// PROVIDERS is now an internal constant — all providers are always loaded.
+// The PROVIDERS / PROVIDER env vars are kept for backwards-compatibility but
+// have no effect: the server drives agent→provider routing via sync_*_agents.
 
-const _providersEnvSet = !!(process.env.PROVIDERS || process.env.PROVIDER);
-
-export let PROVIDERS: string[] = (process.env.PROVIDERS || process.env.PROVIDER || 'openclaw,claude,claude-sdk,copilot,gemini,codex,cursor')
-  .split(',')
-  .map(p => p.trim())
-  .filter(Boolean);
+export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes'];
 
 /** Primary provider (first in list). Kept for backwards-compat with code that only needs one name. */
 export let PROVIDER = PROVIDERS[0];
@@ -120,11 +121,37 @@ export const CLAUDE_SDK_TIMEOUT_MINUTES = parseInt(process.env.CLAUDE_SDK_TIMEOU
 /** bypassPermissions | acceptEdits | dontAsk — default bypassPermissions for unattended agents */
 export const CLAUDE_SDK_PERMISSION_MODE = process.env.CLAUDE_SDK_PERMISSION_MODE || 'bypassPermissions';
 /**
- * Optional path to the claude CLI binary. Set CLAUDE_SDK_EXECUTABLE when the
- * native binary was not installed as an optional npm dep (e.g. --omit=optional
- * on Linux). Example: /usr/local/bin/claude
+ * Path to the claude CLI binary. Explicit via CLAUDE_SDK_EXECUTABLE env var,
+ * or auto-detected from common install locations (npm global, Roaming\npm, etc.).
  */
-export const CLAUDE_SDK_EXECUTABLE = process.env.CLAUDE_SDK_EXECUTABLE || '';
+export const CLAUDE_SDK_EXECUTABLE = (() => {
+  if (process.env.CLAUDE_SDK_EXECUTABLE) return process.env.CLAUDE_SDK_EXECUTABLE;
+  // Auto-detect on Windows: npm global installs land in %APPDATA%\npm\
+  const candidates = [
+    process.env.APPDATA ? `${process.env.APPDATA}\\npm\\claude.cmd` : '',
+    process.env.APPDATA ? `${process.env.APPDATA}\\npm\\claude` : '',
+    process.env.LOCALAPPDATA ? `${process.env.LOCALAPPDATA}\\npm\\claude.cmd` : '',
+    // Unix-style locations (Linux/macOS)
+    '/usr/local/bin/claude',
+    '/usr/bin/claude',
+    `${process.env.HOME ?? ''}/.local/bin/claude`,
+  ].filter(Boolean);
+  const fs_ = require('fs') as typeof import('fs');
+  for (const p of candidates) {
+    if (fs_.existsSync(p)) return p;
+  }
+  return '';
+})();
+
+// ── Hermes provider ───────────────────────────────────────────────────────────
+// Provider name: "hermes" — uses `hermes acp` (primary) or `hermes chat` CLI (fallback).
+// HERMES_HOME: emergency global override only. In normal operation, each agent spawns
+// hermes with HERMES_HOME set to its own native profile at ~/.hermes/profiles/{agentId}/.
+// See hermesProfile.ts for profile path logic.
+
+export const HERMES_HOME = process.env.HERMES_HOME || '';
+export const HERMES_TIMEOUT_MINUTES = parseInt(process.env.HERMES_TIMEOUT_MINUTES || '15', 10);
+// HERMES_USE_ACP=false forces hermes chat -Q -q (CLI) instead of hermes acp
 
 // ── Copilot ACP provider ──────────────────────────────────────────────────────
 
@@ -134,11 +161,11 @@ export const COPILOT_TIMEOUT_MINUTES = parseInt(process.env.COPILOT_TIMEOUT_MINU
 // ── Non-OpenClaw agents base folder ──────────────────────────────────────────
 // All non-OpenClaw providers (Cursor, Gemini, Codex, Copilot, Claude) use this
 // as the root for their workspace and task folders.
-// Structure: AGENTS_FOLDER/ctrlnode/{tasks,workspace-mc-xxx,...}
-export let AGENTS_FOLDER = process.env.AGENTS_FOLDER || os.homedir();
+// Structure: BASE_PATH/.ctrlnode/{tasks,workspace-mc-xxx,...}
+export let BASE_PATH = process.env.BASE_PATH || os.homedir();
 
 // Auto-bootstrap common folder structure if it doesn't exist
-const agentsRoot = path.join(AGENTS_FOLDER, '.ctrlnode');
+const agentsRoot = path.join(BASE_PATH, '.ctrlnode');
 if (!fs.existsSync(agentsRoot)) {
   try {
     fs.mkdirSync(agentsRoot, { recursive: true });
@@ -148,19 +175,24 @@ if (!fs.existsSync(agentsRoot)) {
   }
 }
 
-export let AGENTS_CTRLNODE_ROOT = agentsRoot;
+export let CTRLNODE_ROOT = agentsRoot;
+
+/** Per-agent Hermes homes under the current ctrlnode root. */
+export function getHermesAgentsDir(): string {
+  return path.join(CTRLNODE_ROOT, 'agents');
+}
 
 /**
  * Derives the project-level home directory from a taskFolderName.
  * taskFolderName format: "tasks/{project}/{date}/{taskId}"
- * Returns: AGENTS_CTRLNODE_ROOT/tasks/{project}
- * Falls back to AGENTS_CTRLNODE_ROOT if the name is missing or has fewer than 2 segments.
+ * Returns: CTRLNODE_ROOT/tasks/{project}
+ * Falls back to CTRLNODE_ROOT if the name is missing or has fewer than 2 segments.
  */
 export function resolveProjectHome(taskFolderName: string | undefined): string {
-  if (!taskFolderName) return AGENTS_CTRLNODE_ROOT;
+  if (!taskFolderName) return CTRLNODE_ROOT;
   const parts = taskFolderName.replace(/\\/g, '/').split('/').filter(Boolean);
-  if (parts.length >= 2) return path.join(AGENTS_CTRLNODE_ROOT, parts[0], parts[1]);
-  return path.join(AGENTS_CTRLNODE_ROOT, taskFolderName);
+  if (parts.length >= 2) return path.join(CTRLNODE_ROOT, parts[0], parts[1]);
+  return path.join(CTRLNODE_ROOT, taskFolderName);
 }
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
@@ -169,230 +201,82 @@ export const BRIDGE_VERSION = 'v2026.2.0';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
-/**
- * Synchronous TTY prompt that works in compiled Bun binaries on all platforms.
- * On Windows, uses globalThis.prompt (blocks correctly in Bun).
- * On Linux/macOS, reads directly from /dev/tty to avoid Bun's prompt returning '' immediately.
- */
-function ttyPrompt(message: string): string | null {
-  if (process.platform === 'win32') {
-    const builtinPrompt = (globalThis as any).prompt as ((msg: string) => string | null | undefined) | undefined;
-    if (typeof builtinPrompt === 'function') {
-      const result = builtinPrompt(message);
-      return result ?? null;
-    }
-    return null;
-  }
-
-  // Linux / macOS: read directly from /dev/tty — blocks until the user presses Enter.
-  try {
-    const { execFileSync } = require('child_process') as typeof import('child_process');
-    process.stderr.write(message + ' ');
-    const line = execFileSync('bash', ['-c', 'read -r _line </dev/tty && printf "%s" "$_line"'], {
-      stdio: ['inherit', 'pipe', 'inherit'],
-      timeout: 0,
-    });
-    return line.toString();
-  } catch {
-    return null;
-  }
-}
-
-const canPrompt = process.stdout.isTTY === true;
-
-/** --setup flag forces re-running all interactive prompts even if env vars are set. */
-const FORCE_SETUP = process.argv.includes('--setup');
-
-/** True when user explicitly chose Claude subscription mode (no API key needed). */
-let _claudeSubscriptionMode = false;
-
-// ── Interactive TTY setup ─────────────────────────────────────────────────────
-
 export const DOTENV_PATH: string | null = _dotenvPath;
 
-if (process.stdout.isTTY && canPrompt) {
-  if (FORCE_SETUP) {
-    const input = ttyPrompt(`Enter SaaS URL [${SAAS_URL}]:`);
-    SAAS_URL = (input?.trim() || SAAS_URL).trim();
-  }
-
-  if (!PAIRING_TOKEN || FORCE_SETUP) {
-    let tokenInput: string | null = null;
-    while (!tokenInput?.trim()) {
-      tokenInput = ttyPrompt('Enter your CtrlNode pairing token (app.ctrlnode.ai → Bridge Tokens)') ?? null;
-      if (!tokenInput?.trim()) {
-        console.error('  ✗ Token required. Press Ctrl+C to cancel.');
-      }
-    }
-    PAIRING_TOKEN = tokenInput.trim();
-  }
-
-  // If providers were set via env (not interactive), still ask for agents folder if needed
-  if (_providersEnvSet && PROVIDERS.some(p => p !== 'openclaw') && FORCE_SETUP) {
-    const defaultFolder = process.cwd();
-    const input = ttyPrompt(`Enter working folder for agent files [${defaultFolder}]:`);
-    process.env.AGENTS_FOLDER = input?.trim() || defaultFolder;
-  }
-
-  if (!_providersEnvSet || FORCE_SETUP) {
-    // Display names shown to user → internal provider id
-    const SELECTABLE: Array<{ label: string; id: string }> = [
-      { label: 'OpenClaw',       id: 'openclaw'   },
-      { label: 'Claude',         id: 'claude-sdk' },
-      { label: 'GitHub Copilot', id: 'copilot'    },
-      { label: 'Gemini',         id: 'gemini'     },
-      { label: 'Codex',          id: 'codex'      },
-      { label: 'Cursor',         id: 'cursor'     },
-    ];
-    console.log('\nSelect providers to enable (Y = yes, Enter = no):');
-    const selected: string[] = [];
-    for (const { label, id } of SELECTABLE) {
-      const answer = ttyPrompt(`  [ ] Enable ${label}? [y/N]:`);
-      const yes = !!answer && /^y/i.test(answer.trim());
-      if (yes) selected.push(id);
-    }
-    if (selected.length > 0) {
-      PROVIDERS = selected;
-      PROVIDER = PROVIDERS[0];
-    } else {
-      console.error('\nNo providers selected. At least one provider is required.');
-      process.exit(1);
-    }
-
-    // Ask for agents folder now that we know which providers are active
-    if (PROVIDERS.some(p => p !== 'openclaw') && FORCE_SETUP) {
-      const defaultFolder = process.cwd();
-      const input = ttyPrompt(`Enter working folder for agent files [${defaultFolder}]:`);
-      process.env.AGENTS_FOLDER = input?.trim() || defaultFolder;
-    }
-
-    // Claude: subscription vs API token
-    if (PROVIDERS.includes('claude-sdk') && (!process.env.ANTHROPIC_API_KEY || FORCE_SETUP)) {
-      console.log('\n  Claude can run with:');
-      console.log('    1. Your subscription (Claude Max / Pro — claude CLI must be logged in)');
-      console.log('    2. An Anthropic API key');
-      let claudeMode: string | null = null;
-      while (!claudeMode || (claudeMode.trim() !== '1' && claudeMode.trim() !== '2')) {
-        claudeMode = ttyPrompt('  Choose [1/2]:') ?? null;
-      }
-      if (claudeMode.trim() === '2') {
-        let key: string | null = null;
-        while (!key?.trim()) {
-          key = ttyPrompt('  Enter your Anthropic API key:') ?? null;
-          if (!key?.trim()) console.error('  ✗ API key required. Press Ctrl+C to cancel.');
-        }
-        process.env.ANTHROPIC_API_KEY = key.trim();
-      } else {
-        _claudeSubscriptionMode = true;
-      }
-    }
-
-    // Cursor: API token
-    if (PROVIDERS.includes('cursor') && (!process.env.CURSOR_API_KEY || FORCE_SETUP)) {
-      let key: string | null = null;
-      while (!key?.trim()) {
-        key = ttyPrompt('\n  Enter your Cursor API key (Cursor Dashboard → Integrations):') ?? null;
-        if (!key?.trim()) console.error('  ✗ Cursor API key required. Press Ctrl+C to cancel.');
-      }
-      process.env.CURSOR_API_KEY = key.trim();
-    }
-
-    // OpenClaw: gateway token
-    if (PROVIDERS.includes('openclaw') && (!process.env.OPENCLAW_GATEWAY_TOKEN || FORCE_SETUP)) {
-      let key: string | null = null;
-      while (!key?.trim()) {
-        key = ttyPrompt('\n  Enter your OpenClaw gateway token:') ?? null;
-        if (!key?.trim()) console.error('  ✗ OpenClaw token required. Press Ctrl+C to cancel.');
-      }
-      process.env.OPENCLAW_GATEWAY_TOKEN = key.trim();
-    }
-  }
-
-  if (PROVIDERS.includes('openclaw') && (!process.env.OPENCLAW_CONFIG_PATH && !process.env.OPENCLAW_STATE_DIR && !process.env.OPENCLAW_HOME || FORCE_SETUP)) {
-    const defaultDir = path.join(os.homedir(), '.openclaw');
-    const input = ttyPrompt(`Enter OpenClaw directory [${defaultDir}]:`);
-    const selectedDir = (input || defaultDir).trim();
-    process.env.OPENCLAW_HOME = selectedDir.replace(/[\\\/]\.openclaw$/, '');
-  }
-
-  // ── Save interactive answers to .env so next run skips prompts ──────────────
-  // Only write when there was no pre-existing .env and user went through the
-  // interactive flow (not when all vars were already in env).
-  if (!_dotenvPath) {
-    try {
-      const envLines: string[] = [];
-      if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
-      if (SAAS_URL && SAAS_URL !== 'wss://api.ctrlnode.ai/ws/bridge') envLines.push(`SAAS_URL=${SAAS_URL}`);
-      if (PROVIDERS.length) envLines.push(`PROVIDERS=${PROVIDERS.join(',')}`);
-      if (process.env.AGENTS_FOLDER) envLines.push(`AGENTS_FOLDER=${process.env.AGENTS_FOLDER}`);
-      if (process.env.ANTHROPIC_API_KEY) envLines.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
-      if (process.env.CURSOR_API_KEY) envLines.push(`CURSOR_API_KEY=${process.env.CURSOR_API_KEY}`);
-      if (process.env.OPENCLAW_GATEWAY_TOKEN) envLines.push(`OPENCLAW_GATEWAY_TOKEN=${process.env.OPENCLAW_GATEWAY_TOKEN}`);
-      if (process.env.OPENCLAW_HOME) envLines.push(`OPENCLAW_HOME=${process.env.OPENCLAW_HOME}`);
-      if (envLines.length > 0) {
-        const ctrlnodeDir = path.join(process.env.AGENTS_FOLDER || os.homedir(), '.ctrlnode');
-        fs.mkdirSync(ctrlnodeDir, { recursive: true });
-        const envPath = path.join(ctrlnodeDir, '.env');
-        fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
-        console.log(`\n  ✓ Configuration saved to ${envPath}`);
-      }
-    } catch (e: any) {
-      console.warn(`  ⚠ Could not save .env: ${e.message}`);
-    }
-  }
-}
-
-// ── Re-read mutable env vars after interactive setup ─────────────────────────
-// process.env may have been mutated by the TTY block above; refresh exported lets.
+// ── Refresh exported vars from process.env (loaded from .env or shell) ────────
 ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY    || ANTHROPIC_API_KEY;
 CURSOR_API_KEY       = process.env.CURSOR_API_KEY       || CURSOR_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
-AGENTS_FOLDER        = process.env.AGENTS_FOLDER        || AGENTS_FOLDER;
-AGENTS_CTRLNODE_ROOT = path.join(AGENTS_FOLDER, '.ctrlnode');
+BASE_PATH     = process.env.BASE_PATH || BASE_PATH;
+CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
 
-// ── Auto-persist AGENTS_FOLDER if missing from an existing .env ──────────────
-// When a user already had PAIRING_TOKEN + PROVIDERS in their .env, the
-// interactive setup is skipped and AGENTS_FOLDER is never written. Detect this
-// and silently append the default (os.homedir()) so future runs are consistent.
-if (_dotenvPath && !process.env.AGENTS_FOLDER) {
+// If .env exists but BASE_PATH is missing, default to homedir for consistency.
+if (_dotenvPath && !process.env.BASE_PATH) {
   const defaultAgentsFolder = os.homedir();
   try {
-    fs.appendFileSync(_dotenvPath, `\nAGENTS_FOLDER=${defaultAgentsFolder}\n`, 'utf8');
-    process.env.AGENTS_FOLDER = defaultAgentsFolder;
-    AGENTS_FOLDER = defaultAgentsFolder;
-    AGENTS_CTRLNODE_ROOT = path.join(AGENTS_FOLDER, '.ctrlnode');
+    fs.appendFileSync(_dotenvPath, `\nBASE_PATH=${defaultAgentsFolder}\n`, 'utf8');
+    process.env.BASE_PATH = defaultAgentsFolder;
+    BASE_PATH = defaultAgentsFolder;
+    CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
     logger.debug('agents_folder_auto_persisted', { path: _dotenvPath, value: defaultAgentsFolder });
   } catch (e: any) {
     logger.warn('agents_folder_auto_persist_failed', { error: e?.message });
   }
 }
 
-if (!PAIRING_TOKEN) {
+if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
   logger.error('pairing_token_missing', { message: 'PAIRING_TOKEN is required.' });
-  if (!process.env.BUN_TEST && !process.env.TEST) {
-    console.error('PAIRING_TOKEN is required. Set the PAIRING_TOKEN environment variable.');
+}
+
+/**
+ * If PAIRING_TOKEN is missing, prompts the user interactively and persists
+ * the token to the .env file. Must be called from index.ts before connect().
+ */
+export async function ensurePairingToken(): Promise<void> {
+  if (PAIRING_TOKEN) return;
+
+  const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
+  const { createInterface } = await import('readline');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const token = await new Promise<string>(resolve => {
+    rl.question('\nPAIRING_TOKEN not found. Enter your pairing token (Settings → Bridge at app.ctrlnode.ai): ', answer => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+
+  if (!token) {
+    console.error('No token entered. Exiting.');
     process.exit(1);
   }
+
+  PAIRING_TOKEN = token;
+  process.env.PAIRING_TOKEN = token;
+
+  try {
+    fs.mkdirSync(path.dirname(envFile), { recursive: true });
+    const existing = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+    if (!existing.includes('PAIRING_TOKEN')) {
+      fs.appendFileSync(envFile, `\nPAIRING_TOKEN=${token}\n`, 'utf8');
+      console.log(`Token saved to ${envFile}\n`);
+    }
+  } catch (e: any) {
+    logger.warn('pairing_token_persist_failed', { error: e?.message });
+  }
 }
 
-if (PROVIDERS.includes('claude-sdk') && !ANTHROPIC_API_KEY && !_claudeSubscriptionMode) {
-  logger.warn('anthropic_api_key_missing', { message: 'ANTHROPIC_API_KEY is required for the claude-sdk provider.' });
-  if (!process.env.BUN_TEST && !process.env.TEST) {
-    console.warn('Warning: ANTHROPIC_API_KEY is not set. The claude-sdk provider will fail when dispatching tasks.');
-  }
-} else if (PROVIDERS.includes('claude-sdk') && ANTHROPIC_API_KEY) {
-  logger.info('anthropic_api_key_detected', { mode: 'api-key', keyPresent: true });
-} else if (PROVIDERS.includes('claude-sdk') && _claudeSubscriptionMode) {
-  logger.info('anthropic_api_key_detected', { mode: 'subscription', keyPresent: false });
+// Startup credential diagnostics — informational only; missing keys cause task
+// failures at dispatch time, not Bridge startup failures.
+if (!ANTHROPIC_API_KEY) {
+  logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
+} else {
+  logger.info('anthropic_api_key_detected', { mode: 'api-key' });
 }
 
-if (PROVIDERS.includes('cursor') && !CURSOR_API_KEY) {
-  logger.warn('cursor_api_key_missing', { message: 'CURSOR_API_KEY is required for the cursor provider.' });
-  if (!process.env.BUN_TEST && !process.env.TEST) {
-    console.warn('Warning: CURSOR_API_KEY is not set. The cursor provider will fail when dispatching tasks.');
-  }
-} else if (PROVIDERS.includes('cursor') && CURSOR_API_KEY) {
-  logger.info('cursor_api_key_detected', { mode: 'api-key', keyPresent: true });
+if (!CURSOR_API_KEY) {
+  logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
+} else {
+  logger.info('cursor_api_key_detected', { mode: 'api-key' });
 }
 
 // ── Resolve OPENCLAW_CONFIG ───────────────────────────────────────────────────
@@ -410,21 +294,17 @@ export function refreshOpenClawConfig(): string {
   return OPENCLAW_CONFIG;
 }
 
-if (PROVIDERS.includes('openclaw')) {
-  refreshOpenClawConfig();
+// Resolve OpenClaw config path; if the file doesn't exist, remove openclaw from
+// the active PROVIDERS list so the factory skips it instead of crashing.
+refreshOpenClawConfig();
+if (!fs.existsSync(OPENCLAW_CONFIG)) {
+  logger.info('openclaw_config_not_found', {
+    path: OPENCLAW_CONFIG,
+    note: 'OpenClaw provider disabled. Set OPENCLAW_HOME or ensure ~/.openclaw/openclaw.json exists to enable it.',
+  });
+  PROVIDERS = PROVIDERS.filter(p => p !== 'openclaw');
+  PROVIDER = PROVIDERS[0];
 }
 
 export const ctrlnodePath = path.join(path.dirname(OPENCLAW_CONFIG || path.join(os.homedir(), '.openclaw', 'openclaw.json')), 'ctrlnode');
-
-// ── Startup validation (openclaw only) ───────────────────────────────────────
-
-if (PROVIDERS.includes('openclaw') && !fs.existsSync(OPENCLAW_CONFIG)) {
-  logger.error('config_missing', { expected: OPENCLAW_CONFIG });
-  if (!process.env.BUN_TEST && !process.env.TEST) {
-    console.error('OpenClaw configuration not found.');
-    console.error(`   Expected at: ${OPENCLAW_CONFIG}`);
-    console.error('   Set OPENCLAW_CONFIG_PATH, OPENCLAW_STATE_DIR, OPENCLAW_HOME, or ensure ~/.openclaw/openclaw.json exists.');
-    process.exit(1);
-  }
-}
 

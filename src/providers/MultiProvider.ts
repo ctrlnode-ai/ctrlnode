@@ -112,11 +112,11 @@ export class MultiProvider implements IProvider {
     return null;
   }
 
-  resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
+  resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean, agentId?: string): string | null {
     const provider = this.providers.find(p => p.providerName === providerName);
-    if (provider) return provider.resolveFilesystemBase(undefined, useCtrlnode);
+    if (provider) return provider.resolveFilesystemBase(agentId, useCtrlnode);
     // Fallback to first provider
-    return this.providers[0]?.resolveFilesystemBase(undefined, useCtrlnode) ?? null;
+    return this.providers[0]?.resolveFilesystemBase(agentId, useCtrlnode) ?? null;
   }
 
   resolveWorkspaceCreationBase(useCtrlnode: boolean): string | null {
@@ -141,29 +141,79 @@ export class MultiProvider implements IProvider {
     return [...seen].sort();
   }
 
+  /**
+   * Runs isAvailable() on all sub-providers concurrently.
+   * Returns a map of providerName → boolean.
+   * Providers that don't implement isAvailable() are assumed available (true).
+   */
+  async checkAllProviders(): Promise<Record<string, boolean>> {
+    const results = await Promise.allSettled(
+      this.providers.map(async p => ({
+        name: p.providerName,
+        available: p.isAvailable ? await p.isAvailable() : true,
+      })),
+    );
+    const health: Record<string, boolean> = {};
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        health[r.value.name] = r.value.available;
+      }
+    }
+    return health;
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
   // ── Internal helpers ──────────────────────────────────────────────────────────
 
   private resolveOwner(agentId: string): IProvider {
     const normId = normalizeAgentId(agentId);
 
+    // Authoritative: sync_*_agents may register provider after openclaw discoverAgents()
+    // already cached this id in agentOwner — always prefer discoveredAgents.provider.
+    const registeredProvider = discoveredAgents[normId]?.provider;
+    if (registeredProvider) {
+      const byName = this.providers.find(p => p.providerName === registeredProvider);
+      if (byName) {
+        this.agentOwner.set(normId, byName);
+        return byName;
+      }
+      const active = this.providers.map(p => p.providerName).join(', ');
+      logger.warn('multi_provider.owner_provider_inactive', { agentId: normId, providerName: registeredProvider, active });
+      throw new Error(`PROVIDER_NOT_ACTIVE:${registeredProvider}`);
+    }
+
     const owner = this.agentOwner.get(normId);
     if (owner) return owner;
 
-    // Secondary lookup: agent was registered via sync_copilot_agents / sync_cursor_agents
-    // (directly into discoveredAgents) without going through discoverAgents(), so
-    // agentOwner was never populated for it. Match by the provider name stored in the registry.
-    const providerName = discoveredAgents[normId]?.provider
-      ?? (this.providers.find(p => p.providerName === 'openclaw') ? 'openclaw' : undefined);
+    // Legacy fallback when provider field is missing (openclaw-only agents).
+    const providerName = this.providers.find(p => p.providerName === 'openclaw') ? 'openclaw' : undefined;
     if (providerName) {
       const byName = this.providers.find(p => p.providerName === providerName);
       if (byName) {
         this.agentOwner.set(normId, byName); // cache for next time
         return byName;
       }
+      // Provider is registered for this agent but NOT active in this Bridge instance.
+      // Throw explicitly — silent fallback to providers[0] would run the task on the
+      // wrong provider without any indication to the user.
+      const active = this.providers.map(p => p.providerName).join(', ');
+      logger.warn('multi_provider.owner_provider_inactive', { agentId: normId, providerName, active });
+      throw new Error(`PROVIDER_NOT_ACTIVE:${providerName}`);
     }
 
-    // Fallback to first provider if agent was auto-registered or not yet discovered
-    logger.warn('multi_provider.owner_not_found.fallback', { agentId: normId, providerName });
-    return this.providers[0];
+    // Truly unknown agent — only safe to fall back to OpenClaw, which discovers
+    // agents dynamically from openclaw.json. Any other provider would silently
+    // run the task on the wrong backend.
+    const fallback = this.providers[0];
+    if (fallback.providerName === 'openclaw') {
+      logger.warn('multi_provider.owner_not_found.fallback_openclaw', { agentId: normId });
+      return fallback;
+    }
+    const activeProviders = this.providers.map(p => p.providerName).join(', ');
+    logger.warn('multi_provider.owner_unknown_no_safe_fallback', { agentId: normId, activeProviders });
+    throw new Error(`AGENT_PROVIDER_UNKNOWN:${normId}`);
   }
 }
