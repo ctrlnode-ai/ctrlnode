@@ -12,21 +12,22 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   CURSOR_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
-import { CURSOR_KNOWN_MODELS } from './knownModels';
-import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded';
-import { SQLITE3_NATIVE_B64 } from './cursorSqlite3NativeEmbedded';
-import { SQLITE3_JS_FILES } from './cursorSqlite3JsEmbedded';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { CURSOR_KNOWN_MODELS } from './knownModels.js';
+import { classifyCursorSdkTerminal, CURSOR_MISSING_API_KEY_REASON } from './providerCursorTerminal.js';
+import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded.js';
+import { SQLITE3_NATIVE_B64 } from './cursorSqlite3NativeEmbedded.js';
+import { SQLITE3_JS_FILES } from './cursorSqlite3JsEmbedded.js';
 
 /**
  * Resolves what to spawn for the cursor SDK runner.
@@ -201,7 +202,7 @@ export class CursorSdkProvider implements IProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const { fetchOpenAiCompatibleModels } = await import('./providerFileUtils');
+    const { fetchOpenAiCompatibleModels } = await import('./providerFileUtils.js');
     const apiKey = process.env.CURSOR_API_KEY ?? '';
     // Cursor uses an OpenAI-compatible API at api.cursor.sh — accept all ids
     const models = await fetchOpenAiCompatibleModels(apiKey, 'https://api.cursor.sh', () => true);
@@ -215,23 +216,31 @@ export class CursorSdkProvider implements IProvider {
   private async _run(
     taskId: string,
     prompt: string,
-    spawnCwd: string,
+    spawnCwd: string | undefined,
     callbacks: TaskCallbacks,
     taskFolderName?: string,
     agentId?: string,
   ): Promise<void> {
-    fs.mkdirSync(spawnCwd, { recursive: true });
+    const apiKey = process.env.CURSOR_API_KEY ?? '';
+    if (!apiKey.trim()) {
+      logger.warn('cursor_sdk.missing_api_key', { taskId });
+      callbacks.onComplete('blocked', CURSOR_MISSING_API_KEY_REASON);
+      return;
+    }
+
+    const effectiveCwd = spawnCwd ?? CTRLNODE_ROOT;
+    fs.mkdirSync(effectiveCwd, { recursive: true });
     const timeoutMs = CURSOR_TIMEOUT_MINUTES * 60_000;
 
-    const mcpRoot = path.resolve(spawnCwd);
+    const mcpRoot = path.resolve(effectiveCwd);
 
     const { cmd: runnerCmd, args: runnerArgs } = getRunnerSpawnArgs();
-    logger.info('cursor_sdk.start', { taskId, cwd: spawnCwd, mcpRoot, cmd: runnerCmd });
+    logger.info('cursor_sdk.start', { taskId, cwd: effectiveCwd, mcpRoot, cmd: runnerCmd });
     logger.info('cursor_sdk.spawn', { cmd: runnerCmd, args: runnerArgs });
     const proc = spawn(runnerCmd, runnerArgs, {
-      cwd: spawnCwd,
+      cwd: effectiveCwd,
       env: { ...process.env },
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
     });
 
@@ -240,10 +249,21 @@ export class CursorSdkProvider implements IProvider {
       return;
     }
 
-    // Detect early exit
+    // Capture stderr so auth errors surfaced there can inform classification.
+    let procStderr = '';
+    proc.stderr?.on('data', (d: Buffer) => {
+      const text = d.toString();
+      process.stderr.write(text); // still forward to host stderr for visibility
+      procStderr += text;
+    });
+
+    // Detect early exit / track process close
     let procExitCode: number | null = null;
     let earlyExitReject: ((err: Error) => void) | null = null;
     const earlyExitPromise = new Promise<never>((_res, rej) => { earlyExitReject = rej; });
+    // Resolves once the process has closed — used to reliably read procExitCode after stdout EOF.
+    let procCloseResolve!: () => void;
+    const procClosePromise = new Promise<void>(res => { procCloseResolve = res; });
     proc.on('error', (err) => {
       logger.error('cursor_sdk.proc_error', { taskId, error: err.message });
       earlyExitReject?.(err);
@@ -251,7 +271,11 @@ export class CursorSdkProvider implements IProvider {
     proc.on('close', (code) => {
       procExitCode = code;
       logger.info('cursor_sdk.proc_close', { taskId, code });
-      earlyExitReject?.(new Error(`cursor-sdk-runner exited with code ${code}`));
+      procCloseResolve();
+      // Include captured stderr in the error message so classifyCursorSdkTerminal
+      // can detect AuthenticationError even when the race is lost vs. readline.
+      const stderrHint = procStderr.trim() ? ` | stderr: ${procStderr.trim().slice(0, 512)}` : '';
+      earlyExitReject?.(new Error(`cursor-sdk-runner exited with code ${code}${stderrHint}`));
     });
 
     let timedOut = false;
@@ -263,6 +287,7 @@ export class CursorSdkProvider implements IProvider {
 
     let accumulatedText = '';
     const writtenFiles: string[] = [];
+    let completedByRunner = false; // set to true when task_error/task_done already called onComplete
 
     // Per-agent model and description override.
     const agentInfo = agentId ? discoveredAgents[agentId] : undefined;
@@ -279,10 +304,10 @@ export class CursorSdkProvider implements IProvider {
       taskId,
       agentId,
       prompt:    wrappedPrompt,
-      cwd:       spawnCwd,
+      cwd:       effectiveCwd,
       mcpRoot,
       model:     effectiveModel,
-      apiKey:    process.env.CURSOR_API_KEY ?? '',
+      apiKey,
       timeoutMs,
     });
     proc.stdin.write(taskConfig + '\n');
@@ -329,7 +354,13 @@ export class CursorSdkProvider implements IProvider {
           }
           return;
         } else if (msg.type === 'task_error') {
-          throw new Error(msg.error ?? 'Cursor runner reported task_error');
+          const terminal = classifyCursorSdkTerminal(String(msg.error ?? ''), {
+            hasApiKey: !!apiKey.trim(),
+            runnerCode: typeof msg.code === 'string' ? msg.code : undefined,
+          });
+          completedByRunner = true;
+          callbacks.onComplete(terminal.status, terminal.reason);
+          return;
         }
       }
     };
@@ -339,8 +370,22 @@ export class CursorSdkProvider implements IProvider {
       earlyExitReject = null;
       clearTimeout(timeoutHandle);
 
+      // task_error inside runnerWork already called onComplete — don't call again.
+      if (completedByRunner) return;
+
       if (timedOut) {
         callbacks.onComplete('blocked', 'Task timed out');
+        return;
+      }
+
+      // stdout closed without task_done and without task_error — process may have crashed.
+      // Wait briefly for the close event so procExitCode is populated before we check it.
+      await Promise.race([procClosePromise, new Promise(r => setTimeout(r, 200))]);
+      if (procExitCode !== null && procExitCode !== 0) {
+        const stderrHint = procStderr.trim() ? procStderr.trim().slice(0, 512) : `exited with code ${procExitCode}`;
+        const terminal = classifyCursorSdkTerminal(stderrHint, { hasApiKey: !!apiKey.trim() });
+        logger.error('cursor_sdk.crashed', { taskId, exitCode: procExitCode, stderr: stderrHint });
+        callbacks.onComplete(terminal.status, terminal.reason);
         return;
       }
 
@@ -353,8 +398,9 @@ export class CursorSdkProvider implements IProvider {
     } catch (err) {
       clearTimeout(timeoutHandle);
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('cursor_sdk.error', { taskId, error: msg });
-      callbacks.onComplete('failed', msg);
+      logger.error('cursor_sdk.error', { taskId, error: msg, exitCode: procExitCode });
+      const terminal = classifyCursorSdkTerminal(msg, { hasApiKey: !!apiKey.trim() });
+      callbacks.onComplete(terminal.status, terminal.reason);
     } finally {
       if (!proc.killed) proc.kill('SIGTERM');
     }

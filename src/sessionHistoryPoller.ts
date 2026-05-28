@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs';
-import { OPENCLAW_CONFIG, SESSION_INACTIVITY_TIMEOUT_MINUTES, SESSION_HISTORY_POLL_MS, AGENT_IDLE_RESET_MS } from './config';
-import { logger } from './logger';
+import { OPENCLAW_CONFIG, SESSION_INACTIVITY_TIMEOUT_MINUTES, SESSION_HISTORY_POLL_MS, AGENT_IDLE_RESET_MS } from './config.js';
+import { logger } from './logger.js';
 import {
   SendToSaasFn,
   SetAgentRunningFn,
@@ -10,7 +10,7 @@ import {
   resolveTaskSessionEntry,
   parseMessagesFromLines,
   checkSessionInactivity,
-} from './sessionLogParser';
+} from './sessionLogParser.js';
 
 // Re-export for existing callers that import these from sessionHistoryPoller.
 export type { SendToSaasFn, SetAgentRunningFn, InactivityCheckResult };

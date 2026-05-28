@@ -6,11 +6,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { CTRLNODE_ROOT } from './config';
-import { deleteDir } from './fileSystem';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { CTRLNODE_ROOT } from './config.js';
+import { deleteDir } from './fileSystem.js';
 import {
   discoveredAgents,
   agentStatuses,
@@ -19,9 +19,9 @@ import {
   upsertAgentConfig,
   deleteAgentConfig,
   normalizeAgentId,
-} from './agentDiscovery';
-import { setupCodexAgentHome } from './codexAgentHome';
-import { ensureHermesProfile, deleteHermesProfile, writeHermesSoulMd, writeHermesProfileConfig } from './hermesProfile';
+} from './agentDiscovery.js';
+import { setupCodexAgentHome } from './codexAgentHome.js';
+import { ensureHermesProfile, deleteHermesProfile, writeHermesSoulMd, writeHermesProfileConfig } from './hermesProfile.js';
 
 /** Providers that support the generic sync_provider_agents flow. */
 export type SyncableProvider = 'cursor' | 'copilot' | 'codex' | 'gemini' | 'claude' | 'claude-sdk' | 'hermes';

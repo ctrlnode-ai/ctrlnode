@@ -25,14 +25,14 @@ import {
   CONNECTION_TIMEOUT_MS,
   BRIDGE_INCOMING_DUMP_PATH,
   PROVIDERS,
-} from './config';
-import { discoveredAgents, agentStatuses, purgedAgentIds, buildAgentSummaries, syncAgentDiscovery } from './agentDiscovery';
-import type { AgentInfo } from './types';
-import { startWatcher, stopWatcher, processFileEvent } from './watcher';
-import { handleMessage } from './messageHandlers';
-import { logger } from './logger';
-import { IProvider } from './providers/IProvider';
-import { HermesProvider } from './providers/HermesProvider';
+} from './config.js';
+import { discoveredAgents, agentStatuses, purgedAgentIds, buildAgentSummaries, syncAgentDiscovery } from './agentDiscovery.js';
+import type { AgentInfo } from './types.js';
+import { startWatcher, stopWatcher, processFileEvent } from './watcher.js';
+import { handleMessage } from './messageHandlers.js';
+import { logger } from './logger.js';
+import { IProvider } from './providers/IProvider.js';
+import { HermesProvider } from './providers/HermesProvider.js';
 
 // ── Module-level state ────────────────────────────────────────────────────────
 

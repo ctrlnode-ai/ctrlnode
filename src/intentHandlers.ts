@@ -1,11 +1,11 @@
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { discoveredAgents, agentStatuses } from './agentDiscovery';
-import { resolveTargetAgentId } from './agentRouting';
-import { getIntentProviderMethod } from './intentDispatchPolicy';
-import { setAgentRunning } from './websocket';
-import { handleInvokeTool } from './openclawInvoker';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { discoveredAgents, agentStatuses } from './agentDiscovery.js';
+import { resolveTargetAgentId } from './agentRouting.js';
+import { getIntentProviderMethod } from './intentDispatchPolicy.js';
+import { setAgentRunning } from './websocket.js';
+import { handleInvokeTool } from './openclawInvoker.js';
 
 /**
  * Main entry point for action-based intents from SaaS.
@@ -173,4 +173,4 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
 
 // Re-export so existing callers (messageHandlers.ts, OpenClawProvider) keep working
 // without updating their import paths.
-export { handleInvokeTool } from './openclawInvoker';
+export { handleInvokeTool } from './openclawInvoker.js';

@@ -10,8 +10,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import { CTRLNODE_ROOT } from './config';
-import { logger } from './logger';
+import { CTRLNODE_ROOT } from './config.js';
+import { logger } from './logger.js';
 
 /**
  * Returns the per-agent CODEX_HOME path: {CTRLNODE_ROOT}/.codex-agents/{agentId}/

@@ -1,7 +1,7 @@
 /**
  * Tracks Hermes ACP session model across setSessionModel, config_option_update, and prompt completion.
  */
-import { normalizeHermesModelId } from './hermesModelUtils';
+import { normalizeHermesModelId } from './hermesModelUtils.js';
 
 export type HermesAcpModelTracker = {
   desiredModel?: string;

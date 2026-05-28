@@ -12,8 +12,8 @@
 
 import path from 'path';
 import fs from 'fs';
-import { FileEntry, FileReadResult } from './types';
-import { MAX_INLINE_IMAGE_BYTES } from './config';
+import { FileEntry, FileReadResult } from './types.js';
+import { MAX_INLINE_IMAGE_BYTES, MAX_INLINE_PDF_BYTES } from './config.js';
 
 // ── MIME type detection ───────────────────────────────────────────────────────
 
@@ -40,6 +40,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   '.bmp':      'image/bmp',
   '.svg':      'image/svg+xml',
   '.avif':     'image/avif',
+  '.pdf':      'application/pdf',
 };
 
 /**
@@ -112,7 +113,15 @@ export function readFileForBridge(fp: string): FileReadResult {
     if (contentType.startsWith('image/')) {
       const size = fs.statSync(fp).size;
       if (size > MAX_INLINE_IMAGE_BYTES) {
-        return { contentType: 'application/octet-stream', content: null, error: `IMAGE_TOO_LARGE:${size}` };
+        return { contentType: 'application/octet-stream', content: null, error: `FILE_TOO_LARGE:${size}` };
+      }
+      return { contentType, content: fs.readFileSync(fp).toString('base64'), error: null };
+    }
+
+    if (contentType === 'application/pdf') {
+      const size = fs.statSync(fp).size;
+      if (size > MAX_INLINE_PDF_BYTES) {
+        return { contentType, content: null, error: `FILE_TOO_LARGE:${size}` };
       }
       return { contentType, content: fs.readFileSync(fp).toString('base64'), error: null };
     }

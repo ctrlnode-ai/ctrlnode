@@ -8,8 +8,8 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { logger } from '../logger';
-import { CTRLNODE_ROOT } from '../config';
+import { logger } from '../logger.js';
+import { CTRLNODE_ROOT } from '../config.js';
 
 // ── Shared model-listing helpers ──────────────────────────────────────────────
 

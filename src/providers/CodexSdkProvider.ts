@@ -11,24 +11,24 @@ import { Codex } from '@openai/codex-sdk';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   CODEX_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { logger } from '../logger';
+} from '../config.js';
+import { logger } from '../logger.js';
 import {
   augmentPromptForRepoMode,
   resolveRepoDispatchSpawn,
   resolveTaskPaths,
   type RepoDispatchSpawnContext,
-} from './repoDispatchContext';
-import { discoveredAgents } from '../agentDiscovery';
-import { getCodexAgentHome } from '../filesystemConfigHandlers';
-import { setAgentRunning } from '../websocket';
-import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils';
+} from './repoDispatchContext.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
+import { setAgentRunning } from '../websocket.js';
+import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils.js';
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
 async function fetchOpenAiModels(): Promise<string[]> {
@@ -103,7 +103,7 @@ export class CodexSdkProvider implements IProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils');
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
     return checkBinaryExists('codex');
   }
 

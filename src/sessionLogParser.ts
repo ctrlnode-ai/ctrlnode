@@ -7,8 +7,8 @@
  */
 
 import path from 'path';
-import { getTaskSubagentSession } from './subagentSessions';
-import { logger } from './logger';
+import { getTaskSubagentSession } from './subagentSessions.js';
+import { logger } from './logger.js';
 
 // ── Shared function-type aliases ─────────────────────────────────────────────
 

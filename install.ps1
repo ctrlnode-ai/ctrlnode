@@ -41,6 +41,48 @@ Write-Host "  Tip: to change it later, set the BASE_PATH environment variable an
 
 [System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
 
+# --- optional provider API keys ---
+function Save-CtrlNodeProviderKeys {
+  param([string]$WorkspaceRoot)
+
+  Write-Host ""
+  Write-Host "Optional: provider API keys (Cursor / Claude agents)"
+  Write-Host "  Skip with Enter or N — add later in $WorkspaceRoot\.ctrlnode\.env" -ForegroundColor DarkGray
+
+  $cursorKey = ""
+  $useCursor = Read-Host "Configure Cursor API key (CURSOR_API_KEY)? (y/N)"
+  if ($useCursor -match '^[yY]') {
+    $cursorKey = (Read-Host "CURSOR_API_KEY").Trim()
+  }
+
+  $claudeKey = ""
+  $useClaude = Read-Host "Configure Claude API key (ANTHROPIC_API_KEY)? (y/N)"
+  if ($useClaude -match '^[yY]') {
+    $claudeKey = (Read-Host "ANTHROPIC_API_KEY").Trim()
+  }
+
+  if (-not $cursorKey -and -not $claudeKey) { return }
+
+  $envDir = Join-Path $WorkspaceRoot ".ctrlnode"
+  New-Item -ItemType Directory -Path $envDir -Force | Out-Null
+  $envFile = Join-Path $envDir ".env"
+
+  $map = @{}
+  if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+      if ($_ -match '^([A-Z_][A-Z0-9_]*)=(.*)$') { $map[$matches[1]] = $matches[2] }
+    }
+  }
+  if ($cursorKey) { $map['CURSOR_API_KEY'] = $cursorKey }
+  if ($claudeKey) { $map['ANTHROPIC_API_KEY'] = $claudeKey }
+
+  ($map.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) | Set-Content -Path $envFile -Encoding utf8
+  Write-Host "  Saved provider keys to: $envFile" -ForegroundColor Gray
+  Write-Host ""
+}
+
+Save-CtrlNodeProviderKeys -WorkspaceRoot $WorkspaceRoot
+
 # --- get latest release tag ---
 Write-Host ""
 Write-Host "Fetching latest release..."
@@ -96,6 +138,7 @@ Write-Host "  ctrlnode"
 Write-Host ""
 Write-Host "Workspace: $WorkspaceRoot"
 Write-Host "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
+Write-Host "Full setup (token + API keys):  ctrlnode --setup"
 Write-Host "Get your token at: https://app.ctrlnode.ai  (Settings → Bridge)"
 Write-Host "Docs:              https://github.com/$REPO#readme"
 Write-Host ""

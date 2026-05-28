@@ -1,12 +1,12 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
-import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_TIMEOUT_MINUTES, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome } from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
+import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_TIMEOUT_MINUTES, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome } from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 
 
 /**
@@ -162,13 +162,13 @@ export class ClaudeCodeProvider implements IProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const { fetchAnthropicModels } = await import('./providerFileUtils');
-    const { ANTHROPIC_API_KEY } = await import('../config');
+    const { fetchAnthropicModels } = await import('./providerFileUtils.js');
+    const { ANTHROPIC_API_KEY } = await import('../config.js');
     return fetchAnthropicModels(ANTHROPIC_API_KEY);
   }
 
   async isAvailable(): Promise<boolean> {
-    const { CLAUDE_SDK_EXECUTABLE } = await import('../config');
+    const { CLAUDE_SDK_EXECUTABLE } = await import('../config.js');
     if (!CLAUDE_SDK_EXECUTABLE) return false;
     const fs_ = await import('fs');
     return fs_.existsSync(CLAUDE_SDK_EXECUTABLE);

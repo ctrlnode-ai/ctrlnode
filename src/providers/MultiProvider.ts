@@ -10,10 +10,10 @@
  *   Ties are broken in PROVIDERS order (first one wins if IDs collide).
  */
 
-import { logger } from '../logger';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
-import { discoveredAgents, normalizeAgentId } from '../agentDiscovery';
+import { logger } from '../logger.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
+import { discoveredAgents, normalizeAgentId } from '../agentDiscovery.js';
 
 export class MultiProvider implements IProvider {
   private readonly providers: IProvider[];

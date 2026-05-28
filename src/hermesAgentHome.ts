@@ -5,9 +5,9 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { CTRLNODE_ROOT, getHermesAgentsDir } from './config';
-import { normalizeAgentId } from './agentDiscovery';
-import { logger } from './logger';
+import { CTRLNODE_ROOT, getHermesAgentsDir } from './config.js';
+import { normalizeAgentId } from './agentDiscovery.js';
+import { logger } from './logger.js';
 
 export function safeHermesAgentDir(agentId: string): string {
   const id = normalizeAgentId(agentId);

@@ -12,33 +12,33 @@ import { spawn } from 'child_process';
 import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
   HERMES_HOME,
   HERMES_TIMEOUT_MINUTES,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
-import { mapAcpUpdate, formatAcpToolCallActivity } from './acpUpdateMapper';
-import { HermesProvider } from './HermesProvider';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { mapAcpUpdate, formatAcpToolCallActivity } from './acpUpdateMapper.js';
+import { HermesProvider } from './HermesProvider.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 import {
   getHermesAgentHome,
   setupHermesAgentHome,
   readHermesAgentsMd,
   readHermesAgentMeta,
-} from '../hermesAgentHome';
-import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile';
+} from '../hermesAgentHome.js';
+import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile.js';
 import {
   detectHermesCopilotApiFailure,
   hermesAcpModelSetSkipReason,
   listHermesModels,
   normalizeHermesModelId,
   shouldSkipHermesAcpSessionModelSet,
-} from '../hermesModelUtils';
+} from '../hermesModelUtils.js';
 import {
   createHermesAcpModelTracker,
   hermesModelsMismatch,
@@ -46,7 +46,7 @@ import {
   observeSessionUpdateForModel,
   resolveHermesRuntimeModel,
   seedTrackerFromSession,
-} from '../hermesAcpModelTracking';
+} from '../hermesAcpModelTracking.js';
 
 export class HermesAcpProvider implements IProvider {
   readonly providerName = 'hermes';
@@ -65,13 +65,13 @@ export class HermesAcpProvider implements IProvider {
 
     if (this.acpAvailable !== null) return this.acpAvailable;
 
-    const { checkBinaryExists, checkHermesAcpAvailable } = await import('./providerHealthUtils');
+    const { checkBinaryExists, checkHermesAcpAvailable } = await import('./providerHealthUtils.js');
     const hasBinary = await checkBinaryExists('hermes');
     this.acpAvailable = hasBinary && (await checkHermesAcpAvailable());
     if (!this.acpAvailable) {
       logger.info('hermes_acp.unavailable', { fallback: 'hermes chat CLI' });
     }
-    return this.acpAvailable;
+    return this.acpAvailable!;
   }
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
@@ -140,7 +140,7 @@ export class HermesAcpProvider implements IProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils');
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
     return checkBinaryExists('hermes');
   }
 

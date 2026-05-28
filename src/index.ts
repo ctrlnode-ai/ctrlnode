@@ -12,18 +12,18 @@ console.log(`\nCTRLNODE Bridge v2026.2.2  built ${_buildTime}\n`);
 // --setup: run interactive wizard and exit before loading anything else.
 // Must be checked before any other imports so config.ts side-effects don't run.
 if (process.argv.includes('--setup')) {
-  const { runSetup } = await import('./setup');
+  const { runSetup } = await import('./setup.js');
   await runSetup();
   process.exit(0);
 }
 
 // config.ts MUST be the first import — it validates env vars and exits
 // with a user-friendly message if required files are missing.
-const { PROVIDERS, ensurePairingToken } = await import('./config');
-const { createProviders } = await import('./providers/factory');
-const { MultiProvider } = await import('./providers/MultiProvider');
-const { runSyncAgents, connect } = await import('./websocket');
-const { logger } = await import('./logger');
+const { PROVIDERS, ensurePairingToken } = await import('./config.js');
+const { createProviders } = await import('./providers/factory.js');
+const { MultiProvider } = await import('./providers/MultiProvider.js');
+const { runSyncAgents, connect } = await import('./websocket.js');
+const { logger } = await import('./logger.js');
 
 // ── Keepalive ─────────────────────────────────────────────────────────────────
 

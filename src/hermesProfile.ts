@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { logger } from './logger';
-import { normalizeAgentId } from './agentDiscovery';
-import { parseHermesModelRef, normalizeHermesModelId } from './hermesModelUtils';
-import { HERMES_HOME } from './config';
+import { logger } from './logger.js';
+import { normalizeAgentId } from './agentDiscovery.js';
+import { parseHermesModelRef, normalizeHermesModelId } from './hermesModelUtils.js';
+import { HERMES_HOME } from './config.js';
 
 function safeProfileId(agentId: string): string {
   const id = normalizeAgentId(agentId);

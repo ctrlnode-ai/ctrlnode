@@ -1,4 +1,4 @@
-import { IProvider } from './providers/IProvider';
+import { IProvider } from './providers/IProvider.js';
 
 /** Callback used by handlers to send a response back to the SaaS. */
 export type SendFn = (payload: any) => void;
