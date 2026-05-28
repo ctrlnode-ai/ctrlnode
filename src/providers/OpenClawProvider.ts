@@ -1,15 +1,15 @@
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary, BridgeMessage } from '../types';
-import { buildAgentSummaries, discoveredAgents, isAgentInCtrlnode, normalizeAgentId } from '../agentDiscovery';
-import { resolveTargetAgentId } from '../agentRouting';
-import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT } from '../config';
-import { wipeAgentSessions } from '../fileSystem';
-import { getIntentProviderMethod } from '../intentDispatchPolicy';
-import { startMainSessionPolling, stopMainSessionPolling } from '../sessionHistoryPoller';
-import { setTaskSubagentSession } from '../subagentSessions';
-import { logger } from '../logger';
-import { augmentPromptForRepoMode, isRepoTaskMode } from './repoDispatchContext';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary, BridgeMessage } from '../types.js';
+import { buildAgentSummaries, discoveredAgents, isAgentInCtrlnode, normalizeAgentId } from '../agentDiscovery.js';
+import { resolveTargetAgentId } from '../agentRouting.js';
+import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT } from '../config.js';
+import { wipeAgentSessions } from '../fileSystem.js';
+import { getIntentProviderMethod } from '../intentDispatchPolicy.js';
+import { startMainSessionPolling, stopMainSessionPolling } from '../sessionHistoryPoller.js';
+import { setTaskSubagentSession } from '../subagentSessions.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, isRepoTaskMode } from './repoDispatchContext.js';
 
 type TaskTerminalStatus = 'failed' | 'blocked';
 
@@ -111,7 +111,7 @@ export class OpenClawProvider implements IProvider {
   async invokeTool(msg: BridgeMessage, sendToSaas: (payload: any) => void): Promise<void> {
     // Delegate to the existing handleInvokeTool logic via a minimal ctx-like adapter.
     // This is imported lazily to avoid circular deps at module load time.
-    const { handleInvokeTool } = await import('../intentHandlers');
+    const { handleInvokeTool } = await import('../intentHandlers.js');
     await handleInvokeTool(msg, {
       sendToSaas,
       syncAgents: () => {},

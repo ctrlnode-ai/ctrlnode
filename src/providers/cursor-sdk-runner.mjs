@@ -55,6 +55,36 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
+function formatTaskError(err) {
+  const cause = err?.cause;
+  const code = (cause?.code ?? err?.code ?? '').toString();
+  const name = (cause?.name ?? err?.name ?? '').toString();
+  const raw = err instanceof Error ? err.message : String(err);
+  const apiKey = (process.env.CURSOR_API_KEY ?? '').trim();
+
+  if (!apiKey) {
+    return {
+      code: 'unauthenticated',
+      error: 'Missing CURSOR_API_KEY. Add your Cursor API key to the Bridge .env file and restart Bridge.',
+    };
+  }
+
+  if (
+    code === 'unauthenticated' ||
+    name === 'AuthenticationError' ||
+    /AuthenticationError/i.test(raw) ||
+    /unauthenticated/i.test(raw) ||
+    /invalid api key/i.test(raw)
+  ) {
+    return {
+      code: 'unauthenticated',
+      error: 'Invalid or unauthorized Cursor API key. Check CURSOR_API_KEY in Bridge .env.',
+    };
+  }
+
+  return { code: code || 'unknown', error: raw || 'Error' };
+}
+
 // ── Dispatch command ──────────────────────────────────────────────────────────
 
 if (msg.command === 'discover') {
@@ -101,6 +131,17 @@ async function runDelete({ agentId, apiKey }) {
 // ── run: dispatch a task to a Cursor agent ────────────────────────────────────
 
 async function runTask({ taskId, agentId, agentName, prompt, cwd, model, apiKey, timeoutMs }) {
+  if (!(apiKey ?? process.env.CURSOR_API_KEY ?? '').trim()) {
+    emit({
+      type: 'task_error',
+      taskId,
+      code: 'unauthenticated',
+      error: 'Missing CURSOR_API_KEY. Add your Cursor API key to the Bridge .env file and restart Bridge.',
+    });
+    process.exitCode = 1;
+    return;
+  }
+
   emit({ type: 'task_started', taskId, cursorAgentId: agentId ?? null });
 
   const modelSelection = { id: model ?? 'composer-2' };
@@ -253,11 +294,13 @@ async function runTask({ taskId, agentId, agentName, prompt, cwd, model, apiKey,
 
   } catch (err) {
     if (cancelTimer) clearTimeout(cancelTimer);
-    try { await agent[Symbol.asyncDispose](); } catch { /* ignore */ }
+    try { await agent?.[Symbol.asyncDispose](); } catch { /* ignore */ }
+    const formatted = formatTaskError(err);
     emit({
       type:  'task_error',
       taskId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatted.error,
+      code:  formatted.code,
     });
     process.exitCode = 1;
   }

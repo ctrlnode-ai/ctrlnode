@@ -20,24 +20,25 @@
  */
 import { spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
-import { CTRLNODE_ROOT, HERMES_HOME, HERMES_TIMEOUT_MINUTES } from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
-import { writeOutputFile, writeAgentLog } from './providerFileUtils';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
+import { CTRLNODE_ROOT, HERMES_HOME, HERMES_TIMEOUT_MINUTES } from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { writeOutputFile, writeAgentLog } from './providerFileUtils.js';
 import {
   formatHermesLogLineForActivity,
   extractHermesSessionId,
   hermesLogLineMatchesSession,
   loadPersistedSessions,
   saveConversationId,
-} from './hermesUtils';
-import { setupHermesAgentHome, readHermesAgentsMd } from '../hermesAgentHome';
-import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile';
-import { listHermesModels, normalizeHermesModelId } from '../hermesModelUtils';
+} from './hermesUtils.js';
+import { setupHermesAgentHome, readHermesAgentsMd } from '../hermesAgentHome.js';
+import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile.js';
+import { listHermesModels, normalizeHermesModelId } from '../hermesModelUtils.js';
 
 function pushActivity(
   line: string,
@@ -72,7 +73,7 @@ export class HermesProvider implements IProvider {
   }
 
   async discoverAgents(): Promise<AgentSummary[]> {
-    const { getGlobalHermesHome } = await import('../hermesProfile');
+    const { getGlobalHermesHome } = await import('../hermesProfile.js');
     const profilesDir = path.join(getGlobalHermesHome(), 'profiles');
     if (!fs.existsSync(profilesDir)) return [];
     try {
@@ -83,6 +84,9 @@ export class HermesProvider implements IProvider {
           name: e.name,
           workspace: path.join(profilesDir, e.name),
           provider: 'hermes',
+          model: 'default',
+          exists: fs.existsSync(path.join(profilesDir, e.name)),
+          hostname: os.hostname(),
         }));
     } catch {
       return [];
@@ -299,7 +303,7 @@ export class HermesProvider implements IProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils');
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
     return checkBinaryExists('hermes');
   }
 }

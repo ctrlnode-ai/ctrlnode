@@ -1,12 +1,12 @@
-import { IProvider } from './IProvider';
-import { OpenClawProvider } from './OpenClawProvider';
-import { ClaudeCodeProvider } from './ClaudeCodeProvider';
-import { ClaudeAgentSdkProvider } from './ClaudeAgentSdkProvider';
-import { CopilotAcpProvider } from './CopilotAcpProvider';
-import { GeminiAcpProvider } from './GeminiAcpProvider';
-import { CodexSdkProvider } from './CodexSdkProvider';
-import { CursorSdkProvider } from './CursorSdkProvider';
-import { HermesAcpProvider } from './HermesAcpProvider';
+import { IProvider } from './IProvider.js';
+import { OpenClawProvider } from './OpenClawProvider.js';
+import { ClaudeCodeProvider } from './ClaudeCodeProvider.js';
+import { ClaudeAgentSdkProvider } from './ClaudeAgentSdkProvider.js';
+import { CopilotAcpProvider } from './CopilotAcpProvider.js';
+import { GeminiAcpProvider } from './GeminiAcpProvider.js';
+import { CodexSdkProvider } from './CodexSdkProvider.js';
+import { CursorSdkProvider } from './CursorSdkProvider.js';
+import { HermesAcpProvider } from './HermesAcpProvider.js';
 
 const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes']);
 

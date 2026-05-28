@@ -3,18 +3,18 @@ import { spawn } from 'child_process';
 import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   COPILOT_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils';
-import { COPILOT_KNOWN_MODELS } from './knownModels';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils.js';
+import { COPILOT_KNOWN_MODELS } from './knownModels.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';

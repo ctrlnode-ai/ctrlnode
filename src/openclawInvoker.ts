@@ -6,29 +6,29 @@
  * Extracted from intentHandlers.ts to keep the intent-routing layer thin.
  */
 
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { discoveredAgents, isAgentInCtrlnode } from './agentDiscovery';
-import { resolveTargetAgentId } from './agentRouting';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { discoveredAgents, isAgentInCtrlnode } from './agentDiscovery.js';
+import { resolveTargetAgentId } from './agentRouting.js';
 import {
   OPENCLAW_GATEWAY_URL,
   OPENCLAW_GATEWAY_TOKEN,
   OPENCLAW_CONFIG,
   ctrlnodePath,
-} from './config';
-import { wipeAgentSessions } from './fileSystem';
+} from './config.js';
+import { wipeAgentSessions } from './fileSystem.js';
 import {
   startMainSessionPolling,
   stopMainSessionPolling,
-} from './sessionHistoryPoller';
-import { setAgentRunning } from './websocket';
-import { setTaskSubagentSession } from './subagentSessions';
+} from './sessionHistoryPoller.js';
+import { setAgentRunning } from './websocket.js';
+import { setTaskSubagentSession } from './subagentSessions.js';
 import {
   sendTaskFailureToSaas,
   sendTaskBlockedToSaas,
   classifyTaskTerminalStatus,
-} from './taskResultHelpers';
+} from './taskResultHelpers.js';
 
 /**
  * Forwards a tool-invocation request to the local OpenClaw gateway

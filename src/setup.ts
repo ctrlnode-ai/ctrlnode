@@ -1,7 +1,7 @@
 /**
  * @file setup.ts
  * @description Interactive setup wizard — runs when ctrlnode is invoked with --setup.
- * Prompts for workspace and pairing token, writes .env, persists BASE_PATH, then exits.
+ * Prompts for workspace, optional provider API keys, pairing token; writes .env; persists BASE_PATH.
  */
 
 import path from 'path';
@@ -9,6 +9,7 @@ import os from 'os';
 import fs from 'fs';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
+import { mergeEnvFile, promptProviderApiKeys } from './setupEnv.js';
 
 function ask(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise(resolve => rl.question(question, answer => resolve(answer.trim())));
@@ -36,6 +37,7 @@ function persistBasePath(workspace: string): void {
 
 export async function runSetup(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const askLine = (q: string) => ask(rl, q);
 
   console.log('');
   console.log('CtrlNode Setup');
@@ -48,14 +50,17 @@ export async function runSetup(): Promise<void> {
   console.log('  For security, the bridge cannot access anything outside this folder.');
   console.log('  If you are a developer, point this to your source code root (e.g. ~/code).');
   const defaultWorkspace = process.env.BASE_PATH || os.homedir();
-  const workspaceRaw = await ask(rl, `Workspace [${defaultWorkspace}]: `);
+  const workspaceRaw = await askLine(`Workspace [${defaultWorkspace}]: `);
   const workspace = workspaceRaw || defaultWorkspace;
   console.log(`  Workspace: ${workspace}\n`);
+
+  // ── Optional provider API keys ───────────────────────────────────────────────
+  const providerKeys = await promptProviderApiKeys(askLine);
 
   // ── Pairing token ─────────────────────────────────────────────────────────────
   console.log('Enter your pairing token.');
   console.log('  Get it at: https://app.ctrlnode.ai  (Settings → Bridge)');
-  const token = await ask(rl, 'Pairing token: ');
+  const token = await askLine('Pairing token: ');
   rl.close();
 
   if (!token) {
@@ -67,7 +72,11 @@ export async function runSetup(): Promise<void> {
   const envDir  = path.join(workspace, '.ctrlnode');
   const envFile = path.join(envDir, '.env');
   fs.mkdirSync(envDir, { recursive: true });
-  fs.writeFileSync(envFile, `PAIRING_TOKEN=${token}\n`, 'utf8');
+  mergeEnvFile(envFile, {
+    PAIRING_TOKEN: token,
+    ...(providerKeys.cursorApiKey ? { CURSOR_API_KEY: providerKeys.cursorApiKey } : {}),
+    ...(providerKeys.anthropicApiKey ? { ANTHROPIC_API_KEY: providerKeys.anthropicApiKey } : {}),
+  });
 
   // ── Persist BASE_PATH in user environment ─────────────────────────────────────
   persistBasePath(workspace);
@@ -77,6 +86,8 @@ export async function runSetup(): Promise<void> {
   console.log('');
   console.log(`Config saved to: ${envFile}`);
   console.log(`BASE_PATH set to: ${workspace}`);
+  if (providerKeys.cursorApiKey) console.log('  CURSOR_API_KEY: saved');
+  if (providerKeys.anthropicApiKey) console.log('  ANTHROPIC_API_KEY: saved');
   console.log('');
   console.log('To start the bridge, either:');
   console.log('  1. Close this terminal and open a new one, then run:');

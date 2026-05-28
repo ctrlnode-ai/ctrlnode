@@ -74,6 +74,70 @@ if [ -n "$SHELL_RC" ]; then
 fi
 export BASE_PATH="$WORKSPACE_ROOT"
 
+# --- optional provider API keys ---
+merge_env_var() {
+  env_file="$1"
+  key="$2"
+  value="$3"
+  tmp="${env_file}.tmp"
+  if [ -f "$env_file" ]; then
+    grep -v "^${key}=" "$env_file" > "$tmp" 2>/dev/null || true
+    mv "$tmp" "$env_file"
+  else
+    : > "$env_file"
+  fi
+  printf '%s=%s\n' "$key" "$value" >> "$env_file"
+}
+
+prompt_provider_api_keys() {
+  workspace="$1"
+  env_dir="${workspace}/.ctrlnode"
+  env_file="${env_dir}/.env"
+
+  echo ""
+  echo "Optional: provider API keys (Cursor / Claude agents)"
+  echo "  Skip with Enter or N — add later in ${env_file}"
+
+  cursor_key=""
+  claude_key=""
+
+  if [ -t 1 ] && [ -e /dev/tty ]; then
+    printf "Configure Cursor API key (CURSOR_API_KEY)? (y/N): " > /dev/tty
+    read -r use_cursor < /dev/tty
+    case "$use_cursor" in
+      y|Y|yes|Yes)
+        printf "CURSOR_API_KEY: " > /dev/tty
+        read -r cursor_key < /dev/tty
+        ;;
+    esac
+
+    printf "Configure Claude API key (ANTHROPIC_API_KEY)? (y/N): " > /dev/tty
+    read -r use_claude < /dev/tty
+    case "$use_claude" in
+      y|Y|yes|Yes)
+        printf "ANTHROPIC_API_KEY: " > /dev/tty
+        read -r claude_key < /dev/tty
+        ;;
+    esac
+  fi
+
+  if [ -z "$cursor_key" ] && [ -z "$claude_key" ]; then
+    return 0
+  fi
+
+  mkdir -p "$env_dir"
+  if [ -n "$cursor_key" ]; then
+    merge_env_var "$env_file" "CURSOR_API_KEY" "$cursor_key"
+  fi
+  if [ -n "$claude_key" ]; then
+    merge_env_var "$env_file" "ANTHROPIC_API_KEY" "$claude_key"
+  fi
+  echo "  Saved provider keys to: ${env_file}"
+  echo ""
+}
+
+prompt_provider_api_keys "$WORKSPACE_ROOT"
+
 # --- detect OS and arch ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -181,6 +245,7 @@ echo "  ctrlnode"
 echo ""
 echo "Workspace: $WORKSPACE_ROOT"
 echo "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
+echo "Full setup (token + API keys):  ctrlnode --setup"
 echo "Get your token at: https://app.ctrlnode.ai  (Settings → Bridge)"
 echo "Docs:              https://github.com/${REPO}#readme"
 echo ""

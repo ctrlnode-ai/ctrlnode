@@ -1,4 +1,4 @@
-import { AgentSummary } from '../types';
+import { AgentSummary } from '../types.js';
 
 export interface DispatchTaskParams {
   agentId: string;

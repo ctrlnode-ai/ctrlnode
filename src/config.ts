@@ -6,8 +6,8 @@
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { logger } from './logger';
-import { resolveOpenClawConfigPath } from './configResolution';
+import { logger } from './logger.js';
+import { resolveOpenClawConfigPath } from './configResolution.js';
 
 // ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
 function _findDotenv(): string | null {
@@ -76,13 +76,11 @@ export const WATCHER_USE_POLLING = process.env.WATCHER_USE_POLLING === 'true';
 export const WATCHER_POLL_INTERVAL = parseInt(process.env.WATCHER_POLL_INTERVAL || '1000', 10);
 
 // ── Provider selection ────────────────────────────────────────────────────────
-// PROVIDERS is now an internal constant — all providers are always loaded.
-// The PROVIDERS / PROVIDER env vars are kept for backwards-compatibility but
-// have no effect: the server drives agent→provider routing via sync_*_agents.
+// Internal constant — all providers are always loaded.
+// The server drives agent→provider routing via sync_*_agents messages.
 
 export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes'];
 
-/** Primary provider (first in list). Kept for backwards-compat with code that only needs one name. */
 export let PROVIDER = PROVIDERS[0];
 
 // ── Claude Code provider ──────────────────────────────────────────────────────
@@ -176,9 +174,40 @@ if (!fs.existsSync(agentsRoot)) {
   } catch (err) {
     logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
   }
+
+  // ── Save interactive answers to .env so next run skips prompts ──────────────
+  // Only write when there was no pre-existing .env and user went through the
+  // interactive flow (not when all vars were already in env).
+  if (!_dotenvPath) {
+    try {
+      const envLines: string[] = [];
+      if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
+      if (SAAS_URL && SAAS_URL !== 'wss://api.ctrlnode.ai/ws/bridge') envLines.push(`SAAS_URL=${SAAS_URL}`);
+      if (process.env.ANTHROPIC_API_KEY) envLines.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
+      if (process.env.CURSOR_API_KEY) envLines.push(`CURSOR_API_KEY=${process.env.CURSOR_API_KEY}`);
+      if (process.env.OPENCLAW_GATEWAY_TOKEN) envLines.push(`OPENCLAW_GATEWAY_TOKEN=${process.env.OPENCLAW_GATEWAY_TOKEN}`);
+      if (process.env.OPENCLAW_HOME) envLines.push(`OPENCLAW_HOME=${process.env.OPENCLAW_HOME}`);
+      if (envLines.length > 0) {
+        const ctrlnodeDir = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode');
+        fs.mkdirSync(ctrlnodeDir, { recursive: true });
+        const envPath = path.join(ctrlnodeDir, '.env');
+        fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
+        console.log(`\n  ✓ Configuration saved to ${envPath}`);
+      }
+    } catch (e: any) {
+      console.warn(`  ⚠ Could not save .env: ${e.message}`);
+    }
+  }
 }
 
-export let CTRLNODE_ROOT = agentsRoot;
+// ── Re-read mutable env vars after interactive setup ─────────────────────────
+// process.env may have been mutated by the TTY block above; refresh exported lets.
+ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || ANTHROPIC_API_KEY;
+CURSOR_API_KEY         = process.env.CURSOR_API_KEY         || CURSOR_API_KEY;
+OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
+BASE_PATH = process.env.BASE_PATH || BASE_PATH;
+
+export let CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
 
 /** Per-agent Hermes homes under the current ctrlnode root. */
 export function getHermesAgentsDir(): string {
@@ -204,6 +233,8 @@ export const BRIDGE_VERSION = 'v2026.2.2';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
+export const MAX_INLINE_PDF_BYTES = 15 * 1024 * 1024;
+
 export const DOTENV_PATH: string | null = _dotenvPath;
 
 // ── Refresh exported vars from process.env (loaded from .env or shell) ────────
@@ -213,19 +244,6 @@ OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_
 BASE_PATH     = process.env.BASE_PATH || BASE_PATH;
 CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
 
-// If .env exists but BASE_PATH is missing, default to homedir for consistency.
-if (_dotenvPath && !process.env.BASE_PATH) {
-  const defaultAgentsFolder = os.homedir();
-  try {
-    fs.appendFileSync(_dotenvPath, `\nBASE_PATH=${defaultAgentsFolder}\n`, 'utf8');
-    process.env.BASE_PATH = defaultAgentsFolder;
-    BASE_PATH = defaultAgentsFolder;
-    CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
-    logger.debug('agents_folder_auto_persisted', { path: _dotenvPath, value: defaultAgentsFolder });
-  } catch (e: any) {
-    logger.warn('agents_folder_auto_persist_failed', { error: e?.message });
-  }
-}
 
 if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
   logger.error('pairing_token_missing', { message: 'PAIRING_TOKEN is required.' });
@@ -281,6 +299,7 @@ if (!CURSOR_API_KEY) {
 } else {
   logger.info('cursor_api_key_detected', { mode: 'api-key' });
 }
+
 
 // ── Resolve OPENCLAW_CONFIG ───────────────────────────────────────────────────
 

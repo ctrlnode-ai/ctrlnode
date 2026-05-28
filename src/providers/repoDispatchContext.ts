@@ -2,8 +2,8 @@
  * Shared WORK DIRECTORY (repo) vs OUTPUT ONLY dispatch paths for all Bridge providers.
  */
 import path from 'path';
-import { CTRLNODE_ROOT } from '../config';
-import type { DispatchTaskParams } from './IProvider';
+import { CTRLNODE_ROOT } from '../config.js';
+import type { DispatchTaskParams } from './IProvider.js';
 
 export const TASK_LOG_SYSTEM_BLOCK_HEADER = '## Task log file (mandatory, outside repository)';
 

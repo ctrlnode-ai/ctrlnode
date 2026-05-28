@@ -14,10 +14,10 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { AgentInfo, AgentSummary } from './types';
-import { OPENCLAW_CONFIG, ctrlnodePath, PROVIDERS } from './config';
-import { logger } from './logger';
-import { ensureDir } from './fileSystem';
+import { AgentInfo, AgentSummary } from './types.js';
+import { OPENCLAW_CONFIG, ctrlnodePath, PROVIDERS } from './config.js';
+import { logger } from './logger.js';
+import { ensureDir } from './fileSystem.js';
 
 // ── Runtime state ─────────────────────────────────────────────────────────────
 

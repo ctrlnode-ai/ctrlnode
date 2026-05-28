@@ -19,8 +19,8 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
   resolveProjectHome,
@@ -30,14 +30,14 @@ import {
   CLAUDE_SDK_TIMEOUT_MINUTES,
   CLAUDE_SDK_PERMISSION_MODE,
   CLAUDE_SDK_EXECUTABLE,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs } from './providerFileUtils';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs } from './providerFileUtils.js';
 import {
   appendTaskLogToSystemParts,
   resolveRepoDispatchSpawn,
-} from './repoDispatchContext';
+} from './repoDispatchContext.js';
 
 
 /**

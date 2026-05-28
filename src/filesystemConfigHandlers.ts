@@ -1,23 +1,23 @@
 import fs from 'fs';
 import path from 'path';
 
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT, BASE_PATH } from './config';
-import { ensureDir, readFileForBridge, walkDir, listDirShallow, listDirShallowEntries, sanitizeRelPath } from './fileSystem';
-import { suppressFileChangedForAgentPaths } from './watcher';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT, BASE_PATH } from './config.js';
+import { ensureDir, readFileForBridge, walkDir, listDirShallow, listDirShallowEntries, sanitizeRelPath } from './fileSystem.js';
+import { suppressFileChangedForAgentPaths } from './watcher.js';
 import {
   discoveredAgents,
   isAgentInCtrlnode,
-} from './agentDiscovery';
-import { resolveTargetAgentId } from './agentRouting';
+} from './agentDiscovery.js';
+import { resolveTargetAgentId } from './agentRouting.js';
 
 // Re-exports so existing callers (messageHandlers, CodexSdkProvider) keep working.
-export { getCodexAgentHome, setupCodexAgentHome } from './codexAgentHome';
-export { handleSyncProviderAgents, handleDeleteAgentFolders, handleDeleteAgentConfig, handleUpdateAgentConfig } from './agentRegistrationHandlers';
-export type { SyncableProvider } from './agentRegistrationHandlers';
-export { handleActivatePipelineTask } from './pipelineTaskHandler';
+export { getCodexAgentHome, setupCodexAgentHome } from './codexAgentHome.js';
+export { handleSyncProviderAgents, handleDeleteAgentFolders, handleDeleteAgentConfig, handleUpdateAgentConfig } from './agentRegistrationHandlers.js';
+export type { SyncableProvider } from './agentRegistrationHandlers.js';
+export { handleActivatePipelineTask } from './pipelineTaskHandler.js';
 
 /** Files written only for scaffold/tooling purposes — should not trigger task completion. */
 const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep']);

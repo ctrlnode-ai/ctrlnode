@@ -4,9 +4,9 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
 import { Readable, Writable } from 'stream';
-import { CTRLNODE_ROOT, HERMES_HOME } from './config';
-import { logger } from './logger';
-import { checkBinaryExists, checkHermesAcpAvailable } from './providers/providerHealthUtils';
+import { CTRLNODE_ROOT, HERMES_HOME } from './config.js';
+import { logger } from './logger.js';
+import { checkBinaryExists, checkHermesAcpAvailable } from './providers/providerHealthUtils.js';
 
 /** Normalize model id from CtrlNode UI (spaces → dashes). */
 export function normalizeHermesModelId(model: string | undefined | null): string | undefined {

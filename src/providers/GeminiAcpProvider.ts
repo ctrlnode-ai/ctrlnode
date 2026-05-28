@@ -4,18 +4,18 @@ import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   GEMINI_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
-import { GEMINI_KNOWN_MODELS } from './knownModels';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { GEMINI_KNOWN_MODELS } from './knownModels.js';
 
 export class GeminiAcpProvider implements IProvider {
   readonly providerName = 'gemini';
@@ -77,7 +77,7 @@ export class GeminiAcpProvider implements IProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils');
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
     return checkBinaryExists('gemini');
   }
 
