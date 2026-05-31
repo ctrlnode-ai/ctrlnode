@@ -1,16 +1,17 @@
-# CtrlNode Bridge — Local installer (dev/test)
-# Installs the binary from the same LocalReleases folder — no download needed.
+# CtrlNode Bridge — Windows installer
 # Usage:
-#   .\install.ps1
-#   .\install.ps1 -InstallDir "C:\tools\ctrlnode"
+#   iwr https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.ps1 | iex
+#
+# With custom install directory:
+#   & ([scriptblock]::Create((iwr https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.ps1))) -InstallDir "C:\tools\ctrlnode"
 
 param(
   [string]$InstallDir = "$env:LOCALAPPDATA\Programs\ctrlnode"
 )
 
 $ErrorActionPreference = "Stop"
-$LOCAL_RELEASES    = $PSScriptRoot
-$BINARY_NAME       = "ctrlnode.exe"
+$REPO        = "ctrlnode-ai/ctrlnode"
+$BINARY_NAME = "ctrlnode.exe"
 $DEFAULT_WORKSPACE = $env:USERPROFILE
 
 Write-Host ""
@@ -31,21 +32,24 @@ Write-Host ""
 
 [System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
 
-# --- "download" (fake) ---
-$srcFile = Join-Path $LOCAL_RELEASES $BINARY_NAME
-if (-not (Test-Path $srcFile)) {
-  Write-Error "Binary not found in LocalReleases: $srcFile"
+# --- fetch latest release from GitHub ---
+Write-Host "Fetching latest release..."
+$releaseInfo = Invoke-RestMethod "https://api.github.com/repos/$REPO/releases/latest"
+$tag = $releaseInfo.tag_name
+
+if (-not $tag) {
+  Write-Error "Could not determine latest release tag."
   exit 1
 }
 
-$tag = (Get-Item $srcFile).LastWriteTime.ToString("yyyy-MM-dd")
-
-Write-Host "Fetching latest release..."
-Write-Host "  Release: local"
+Write-Host "  Release: $tag"
 Write-Host "  Asset:   $BINARY_NAME"
 Write-Host ""
 Write-Host "Downloading..."
-Start-Sleep -Milliseconds 300
+
+$downloadUrl = "https://github.com/$REPO/releases/download/$tag/$BINARY_NAME"
+$tmpFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), $BINARY_NAME)
+Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
 # --- install ---
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null

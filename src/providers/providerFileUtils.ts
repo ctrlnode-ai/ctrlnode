@@ -68,6 +68,49 @@ export async function fetchOpenAiCompatibleModels(
   }
 }
 
+// ── Shared model-listing helpers ──────────────────────────────────────────────
+
+/** Fetch available model IDs from the Anthropic API. Returns [] on any failure. */
+export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
+  if (!apiKey) return [];
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json() as any;
+    return ((data.data ?? []) as any[]).map((m: any) => m.id as string).filter(Boolean).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch available model IDs from the OpenAI-compatible API. Returns [] on any failure. */
+export async function fetchOpenAiCompatibleModels(
+  apiKey: string,
+  baseUrl = 'https://api.openai.com',
+  filterFn?: (id: string) => boolean,
+): Promise<string[]> {
+  if (!apiKey) return [];
+  const defaultFilter = (id: string) => /^(gpt-4|gpt-3\.5|o[1-9]|codex)/i.test(id);
+  const keep = filterFn ?? defaultFilter;
+  try {
+    const resp = await fetch(`${baseUrl}/v1/models`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json() as any;
+    return ((data.data ?? []) as any[])
+      .map((m: any) => m.id as string)
+      .filter((id: string) => id && keep(id))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 // ── Status tag detection ──────────────────────────────────────────────────────
 
 export function detectStatusTag(text: string): { status: 'completed' | 'failed' | 'blocked'; reason?: string } {

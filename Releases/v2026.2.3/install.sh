@@ -1,13 +1,14 @@
 #!/usr/bin/env sh
-# CtrlNode Bridge — Local installer (dev/test)
-# Installs the binary from the same LocalReleases folder — no download needed.
+# CtrlNode Bridge — Linux/macOS installer
 # Usage:
-#   sh install.sh
-#   sh install.sh --dir ~/.local/bin
+#   curl -fsSL https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.sh | sh
+#
+# With custom install directory:
+#   curl -fsSL https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.sh | sh -s -- --dir ~/.local/bin
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="ctrlnode-ai/ctrlnode"
 BINARY_NAME="ctrlnode"
 DEFAULT_DIR="/usr/local/bin"
 INSTALL_DIR="$DEFAULT_DIR"
@@ -58,7 +59,7 @@ if [ -n "$SHELL_RC" ]; then
 fi
 export BASE_PATH="$WORKSPACE_ROOT"
 
-# --- detect OS and arch to pick the right local binary ---
+# --- detect OS and arch ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -101,19 +102,35 @@ case "$OS" in
     ;;
 esac
 
-# --- "download" (fake) ---
-SRC_FILE="$SCRIPT_DIR/$ASSET"
-if [ ! -f "$SRC_FILE" ]; then
-  echo "ERROR: Binary not found in LocalReleases: $SRC_FILE" >&2
+# --- fetch latest release from GitHub ---
+echo "Fetching latest release..."
+if command -v curl >/dev/null 2>&1; then
+  TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+elif command -v wget >/dev/null 2>&1; then
+  TAG="$(wget -qO- "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+else
+  echo "ERROR: curl or wget required." >&2
   exit 1
 fi
 
-echo "Fetching latest release..."
-echo "  Release: local"
+if [ -z "$TAG" ]; then
+  echo "ERROR: Could not determine latest release tag." >&2
+  exit 1
+fi
+
+echo "  Release: $TAG"
 echo "  Asset:   $ASSET"
 echo ""
 echo "Downloading..."
-sleep 0.3
+
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+TMP_FILE="$(mktemp)"
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "$DOWNLOAD_URL" -o "$TMP_FILE"
+else
+  wget -qO "$TMP_FILE" "$DOWNLOAD_URL"
+fi
 
 # --- install ---
 mkdir -p "$INSTALL_DIR"
@@ -127,10 +144,10 @@ if [ -f "$DEST" ]; then
 fi
 
 if [ -w "$INSTALL_DIR" ]; then
-  cp "$SRC_FILE" "$DEST"
+  mv "$TMP_FILE" "$DEST"
 else
   echo "Requires sudo to install to $INSTALL_DIR..."
-  sudo cp "$SRC_FILE" "$DEST"
+  sudo mv "$TMP_FILE" "$DEST"
 fi
 
 chmod +x "$DEST"
@@ -141,7 +158,8 @@ if [ "$OS" = "Darwin" ]; then
 fi
 
 echo ""
-echo "✓ Installed: $DEST (local)"
+echo "OK  Installed: $DEST"
+echo "    Version:   $TAG"
 echo ""
 echo "Next: start the Bridge:"
 echo "  ctrlnode"
