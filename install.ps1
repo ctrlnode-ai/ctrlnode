@@ -1,32 +1,21 @@
-# CtrlNode Bridge — Windows installer
-# Usage (from PowerShell):
-#   irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1 | iex
-#
-# Or with a custom install directory:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1))) -InstallDir "C:\tools\ctrlnode"
+# CtrlNode Bridge — Local installer (dev/test)
+# Installs the binary from the same LocalReleases folder — no download needed.
+# Usage:
+#   .\install.ps1
+#   .\install.ps1 -InstallDir "C:\tools\ctrlnode"
 
 param(
-  [string]$InstallDir = ""
+  [string]$InstallDir = "$env:LOCALAPPDATA\Programs\ctrlnode"
 )
 
 $ErrorActionPreference = "Stop"
-$REPO        = "ctrlnode-ai/ctrlnode"
-$BINARY_NAME = "ctrlnode.exe"
-$ASSET       = "ctrlnode.exe"
-$DEFAULT_DIR = "$env:LOCALAPPDATA\Programs\ctrlnode"
+$LOCAL_RELEASES    = $PSScriptRoot
+$BINARY_NAME       = "ctrlnode.exe"
 $DEFAULT_WORKSPACE = $env:USERPROFILE
 
 Write-Host ""
 Write-Host "CtrlNode Bridge Installer" -ForegroundColor Cyan
 Write-Host "--------------------------" -ForegroundColor Cyan
-Write-Host ""
-
-# --- install directory ---
-Write-Host "Where should the ctrlnode binary be installed?"
-Write-Host "This is just the location of the executable — not your workspace." -ForegroundColor DarkGray
-$answer = Read-Host "Install directory [$DEFAULT_DIR]"
-$InstallDir = if ($answer.Trim()) { $answer.Trim() } else { $DEFAULT_DIR }
-Write-Host "  Installing to: $InstallDir" -ForegroundColor Gray
 Write-Host ""
 
 # --- workspace directory ---
@@ -38,112 +27,25 @@ $workspaceAnswer = Read-Host "Workspace [$DEFAULT_WORKSPACE]"
 $WorkspaceRoot = if ($workspaceAnswer.Trim()) { $workspaceAnswer.Trim() } else { $DEFAULT_WORKSPACE }
 Write-Host "  Workspace: $WorkspaceRoot" -ForegroundColor Gray
 Write-Host "  Tip: to change it later, set the BASE_PATH environment variable and restart ctrlnode." -ForegroundColor DarkGray
-
-# --- optional provider API keys ---
-function Save-CtrlNodeProviderKeys {
-  param([string]$WorkspaceRoot)
-
-  Write-Host ""
-  Write-Host "Optional: provider API keys (Cursor / Claude agents)"
-  Write-Host "  Skip with Enter or N — add later in $WorkspaceRoot\.ctrlnode\.env" -ForegroundColor DarkGray
-
-  $cursorKey = ""
-  $useCursor = Read-Host "Configure Cursor API key (CURSOR_API_KEY)? (y/N)"
-  if ($useCursor -match '^[yY]') {
-    $cursorKey = (Read-Host "CURSOR_API_KEY").Trim()
-  }
-
-  $claudeKey = ""
-  $useClaude = Read-Host "Configure Claude API key (ANTHROPIC_API_KEY)? (y/N)"
-  if ($useClaude -match '^[yY]') {
-    $claudeKey = (Read-Host "ANTHROPIC_API_KEY").Trim()
-  }
-
-  if (-not $cursorKey -and -not $claudeKey) { return }
-
-  $envDir = Join-Path $WorkspaceRoot ".ctrlnode"
-  New-Item -ItemType Directory -Path $envDir -Force | Out-Null
-  $envFile = Join-Path $envDir ".env"
-
-  $map = @{}
-  if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
-      if ($_ -match '^([A-Z_][A-Z0-9_]*)=(.*)$') { $map[$matches[1]] = $matches[2] }
-    }
-  }
-  if ($cursorKey) { $map['CURSOR_API_KEY'] = $cursorKey }
-  if ($claudeKey) { $map['ANTHROPIC_API_KEY'] = $claudeKey }
-
-  ($map.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) | Set-Content -Path $envFile -Encoding utf8
-  Write-Host "  Saved provider keys to: $envFile" -ForegroundColor Gray
-  Write-Host ""
-}
-
-Save-CtrlNodeProviderKeys -WorkspaceRoot $WorkspaceRoot
-
-# --- optional provider API keys ---
-function Save-CtrlNodeProviderKeys {
-  param([string]$WorkspaceRoot)
-
-  Write-Host ""
-  Write-Host "Optional: provider API keys (Cursor / Claude agents)"
-  Write-Host "  Skip with Enter or N — add later in $WorkspaceRoot\.ctrlnode\.env" -ForegroundColor DarkGray
-
-  $cursorKey = ""
-  $useCursor = Read-Host "Configure Cursor API key (CURSOR_API_KEY)? (y/N)"
-  if ($useCursor -match '^[yY]') {
-    $cursorKey = (Read-Host "CURSOR_API_KEY").Trim()
-  }
-
-  $claudeKey = ""
-  $useClaude = Read-Host "Configure Claude API key (ANTHROPIC_API_KEY)? (y/N)"
-  if ($useClaude -match '^[yY]') {
-    $claudeKey = (Read-Host "ANTHROPIC_API_KEY").Trim()
-  }
-
-  if (-not $cursorKey -and -not $claudeKey) { return }
-
-  $envDir = Join-Path $WorkspaceRoot ".ctrlnode"
-  New-Item -ItemType Directory -Path $envDir -Force | Out-Null
-  $envFile = Join-Path $envDir ".env"
-
-  $map = @{}
-  if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
-      if ($_ -match '^([A-Z_][A-Z0-9_]*)=(.*)$') { $map[$matches[1]] = $matches[2] }
-    }
-  }
-  if ($cursorKey) { $map['CURSOR_API_KEY'] = $cursorKey }
-  if ($claudeKey) { $map['ANTHROPIC_API_KEY'] = $claudeKey }
-
-  ($map.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) | Set-Content -Path $envFile -Encoding utf8
-  Write-Host "  Saved provider keys to: $envFile" -ForegroundColor Gray
-  Write-Host ""
-}
-
-Save-CtrlNodeProviderKeys -WorkspaceRoot $WorkspaceRoot
-
-# --- get latest release tag ---
 Write-Host ""
-Write-Host "Fetching latest release..."
-$releaseInfo = Invoke-RestMethod "https://api.github.com/repos/$REPO/releases/latest"
-$tag = $releaseInfo.tag_name
 
-if (-not $tag) {
-  Write-Error "Could not determine latest release tag."
+[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
+
+# --- "download" (fake) ---
+$srcFile = Join-Path $LOCAL_RELEASES $BINARY_NAME
+if (-not (Test-Path $srcFile)) {
+  Write-Error "Binary not found in LocalReleases: $srcFile"
   exit 1
 }
 
-Write-Host "  Release: $tag"
-Write-Host "  Asset:   $ASSET"
+$tag = (Get-Item $srcFile).LastWriteTime.ToString("yyyy-MM-dd")
 
-$downloadUrl = "https://github.com/$REPO/releases/download/$tag/$ASSET"
-$tmpFile     = [System.IO.Path]::GetTempFileName() + ".exe"
-
+Write-Host "Fetching latest release..."
+Write-Host "  Release: local"
+Write-Host "  Asset:   $BINARY_NAME"
 Write-Host ""
 Write-Host "Downloading..."
-$client = New-Object System.Net.WebClient
-$client.DownloadFile($downloadUrl, $tmpFile)
+Start-Sleep -Milliseconds 300
 
 # --- install ---
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -156,13 +58,11 @@ if (Test-Path $dest) {
   }
   Remove-Item $dest -Force
 }
-Move-Item $tmpFile $dest -Force
+Copy-Item $srcFile $dest -Force
 
 Write-Host ""
 Write-Host "OK  Installed: $dest" -ForegroundColor Green
 Write-Host "    Version:   $tag"
-
-[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
 
 # --- add to PATH if not already there ---
 $currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
@@ -181,8 +81,7 @@ Write-Host ""
 Write-Host "Workspace: $WorkspaceRoot"
 Write-Host "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
 Write-Host "Full setup (token + API keys):  ctrlnode --setup"
-Write-Host "Get your token at: https://app.ctrlnode.ai  (Settings → Bridge)"
-Write-Host "Docs:              https://github.com/$REPO#readme"
+Write-Host "Get your token at: https://app.ctrlnode.ai  (Settings -> Bridge)"
 Write-Host ""
 
 # --- optional: run the bridge now ---

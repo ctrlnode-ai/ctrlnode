@@ -1,19 +1,16 @@
-﻿#!/usr/bin/env bash
-# CtrlNode Bridge — installer
-# Ignore \r so the script works when downloaded on Windows and piped into bash on WSL/Linux
-(set -o igncr) 2>/dev/null && set -o igncr || true
+#!/usr/bin/env sh
+# CtrlNode Bridge — Local installer (dev/test)
+# Installs the binary from the same LocalReleases folder — no download needed.
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
-#
-# Custom install directory:
-#   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh -s -- --dir ~/.local/bin
+#   sh install.sh
+#   sh install.sh --dir ~/.local/bin
 
 set -e
 
-REPO="ctrlnode-ai/ctrlnode"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY_NAME="ctrlnode"
 DEFAULT_DIR="/usr/local/bin"
-INSTALL_DIR=""
+INSTALL_DIR="$DEFAULT_DIR"
 
 # --- parse args ---
 while [ $# -gt 0 ]; do
@@ -32,22 +29,6 @@ echo "CtrlNode Bridge Installer"
 echo "--------------------------"
 echo ""
 
-# --- install directory ---
-echo "Where should the ctrlnode binary be installed?"
-echo "  (just the location of the executable, not your workspace)"
-if [ -z "$INSTALL_DIR" ]; then
-  if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf "Install directory [%s]: " "$DEFAULT_DIR" > /dev/tty
-    read -r answer < /dev/tty
-    INSTALL_DIR="${answer:-$DEFAULT_DIR}"
-  else
-    INSTALL_DIR="$DEFAULT_DIR"
-    echo "  Using default: $INSTALL_DIR  (pass --dir /your/path to override)"
-  fi
-fi
-echo "  Installing to: $INSTALL_DIR"
-echo ""
-
 # --- workspace directory ---
 echo "Where is your workspace?"
 echo "  This is the root folder where ctrlnode will read and write files."
@@ -62,6 +43,7 @@ else
 fi
 echo "  Workspace: $WORKSPACE_ROOT"
 echo "  Tip: to change it later, set BASE_PATH and restart ctrlnode."
+echo ""
 
 # Persist workspace
 SHELL_RC=""
@@ -76,71 +58,7 @@ if [ -n "$SHELL_RC" ]; then
 fi
 export BASE_PATH="$WORKSPACE_ROOT"
 
-# --- optional provider API keys ---
-merge_env_var() {
-  env_file="$1"
-  key="$2"
-  value="$3"
-  tmp="${env_file}.tmp"
-  if [ -f "$env_file" ]; then
-    grep -v "^${key}=" "$env_file" > "$tmp" 2>/dev/null || true
-    mv "$tmp" "$env_file"
-  else
-    : > "$env_file"
-  fi
-  printf '%s=%s\n' "$key" "$value" >> "$env_file"
-}
-
-prompt_provider_api_keys() {
-  workspace="$1"
-  env_dir="${workspace}/.ctrlnode"
-  env_file="${env_dir}/.env"
-
-  echo ""
-  echo "Optional: provider API keys (Cursor / Claude agents)"
-  echo "  Skip with Enter or N — add later in ${env_file}"
-
-  cursor_key=""
-  claude_key=""
-
-  if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf "Configure Cursor API key (CURSOR_API_KEY)? (y/N): " > /dev/tty
-    read -r use_cursor < /dev/tty
-    case "$use_cursor" in
-      y|Y|yes|Yes)
-        printf "CURSOR_API_KEY: " > /dev/tty
-        read -r cursor_key < /dev/tty
-        ;;
-    esac
-
-    printf "Configure Claude API key (ANTHROPIC_API_KEY)? (y/N): " > /dev/tty
-    read -r use_claude < /dev/tty
-    case "$use_claude" in
-      y|Y|yes|Yes)
-        printf "ANTHROPIC_API_KEY: " > /dev/tty
-        read -r claude_key < /dev/tty
-        ;;
-    esac
-  fi
-
-  if [ -z "$cursor_key" ] && [ -z "$claude_key" ]; then
-    return 0
-  fi
-
-  mkdir -p "$env_dir"
-  if [ -n "$cursor_key" ]; then
-    merge_env_var "$env_file" "CURSOR_API_KEY" "$cursor_key"
-  fi
-  if [ -n "$claude_key" ]; then
-    merge_env_var "$env_file" "ANTHROPIC_API_KEY" "$claude_key"
-  fi
-  echo "  Saved provider keys to: ${env_file}"
-  echo ""
-}
-
-prompt_provider_api_keys "$WORKSPACE_ROOT"
-
-# --- detect OS and arch ---
+# --- detect OS and arch to pick the right local binary ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -155,7 +73,7 @@ case "$OS" in
         fi
         ;;
       aarch64|arm64)
-        echo "ERROR: Linux ARM64 binary not yet available. Build from source: bun build ./src/bridge/index.ts --compile --target=bun-linux-arm64" >&2
+        echo "ERROR: Linux ARM64 binary not yet available." >&2
         exit 1
         ;;
       *)
@@ -168,7 +86,7 @@ case "$OS" in
     case "$ARCH" in
       arm64)   ASSET="ctrlnode-darwin-arm64" ;;
       x86_64)
-        echo "ERROR: macOS Intel binary not yet available. Use Rosetta or build from source." >&2
+        echo "ERROR: macOS Intel binary not yet available." >&2
         exit 1
         ;;
       *)
@@ -183,36 +101,19 @@ case "$OS" in
     ;;
 esac
 
-# --- get latest release tag ---
-echo ""
+# --- "download" (fake) ---
+SRC_FILE="$SCRIPT_DIR/$ASSET"
+if [ ! -f "$SRC_FILE" ]; then
+  echo "ERROR: Binary not found in LocalReleases: $SRC_FILE" >&2
+  exit 1
+fi
+
 echo "Fetching latest release..."
-if command -v curl >/dev/null 2>&1; then
-  LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-elif command -v wget >/dev/null 2>&1; then
-  LATEST_TAG="$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-else
-  echo "ERROR: curl or wget is required." >&2
-  exit 1
-fi
-
-if [ -z "$LATEST_TAG" ]; then
-  echo "ERROR: Could not determine latest release tag." >&2
-  exit 1
-fi
-
-echo "  Release: $LATEST_TAG"
+echo "  Release: local"
 echo "  Asset:   $ASSET"
-
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ASSET}"
-TMP_FILE="$(mktemp)"
-
 echo ""
 echo "Downloading..."
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$DOWNLOAD_URL" -o "$TMP_FILE"
-else
-  wget -qO "$TMP_FILE" "$DOWNLOAD_URL"
-fi
+sleep 0.3
 
 # --- install ---
 mkdir -p "$INSTALL_DIR"
@@ -226,10 +127,10 @@ if [ -f "$DEST" ]; then
 fi
 
 if [ -w "$INSTALL_DIR" ]; then
-  mv "$TMP_FILE" "$DEST"
+  cp "$SRC_FILE" "$DEST"
 else
   echo "Requires sudo to install to $INSTALL_DIR..."
-  sudo mv "$TMP_FILE" "$DEST"
+  sudo cp "$SRC_FILE" "$DEST"
 fi
 
 chmod +x "$DEST"
@@ -240,7 +141,7 @@ if [ "$OS" = "Darwin" ]; then
 fi
 
 echo ""
-echo "✓ Installed: $DEST ($LATEST_TAG)"
+echo "✓ Installed: $DEST (local)"
 echo ""
 echo "Next: start the Bridge:"
 echo "  ctrlnode"
@@ -248,8 +149,7 @@ echo ""
 echo "Workspace: $WORKSPACE_ROOT"
 echo "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
 echo "Full setup (token + API keys):  ctrlnode --setup"
-echo "Get your token at: https://app.ctrlnode.ai  (Settings → Bridge)"
-echo "Docs:              https://github.com/${REPO}#readme"
+echo "Get your token at: https://app.ctrlnode.ai  (Settings -> Bridge)"
 echo ""
 
 # --- optional: run the bridge now ---
