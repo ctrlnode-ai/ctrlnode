@@ -11,18 +11,40 @@ import { Codex } from '@openai/codex-sdk';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   CODEX_TIMEOUT_MINUTES,
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { logger } from '../logger';
-import { discoveredAgents } from '../agentDiscovery';
-import { getCodexAgentHome } from '../filesystemConfigHandlers';
-import { setAgentRunning } from '../websocket';
-import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils';
+} from '../config.js';
+import { logger } from '../logger.js';
+import {
+  augmentPromptForRepoMode,
+  resolveRepoDispatchSpawn,
+  resolveTaskPaths,
+  type RepoDispatchSpawnContext,
+} from './repoDispatchContext.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
+import { setAgentRunning } from '../websocket.js';
+import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils.js';
+
+/** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
+function resolveCodexFromPath(): string | undefined {
+  const cmd = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
+  if (result.status !== 0) return undefined;
+  const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (process.platform === 'win32') {
+    // Prefer .exe over .cmd — the SDK cannot spawn a .cmd wrapper directly
+    const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
+    if (exe) return exe;
+    // No .exe found — .cmd wrappers don't work, skip
+    return undefined;
+  }
+  return candidates[0] ?? undefined;
+}
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
 async function fetchOpenAiModels(): Promise<string[]> {
@@ -44,7 +66,24 @@ export class CodexSdkProvider implements IProvider {
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
     const agentInfo = discoveredAgents[params.agentId];
-    await this._run(params.taskId, params.prompt, callbacks, params.agentId, params.taskFolderName, agentInfo?.description, agentInfo?.model);
+    const dispatch = resolveRepoDispatchSpawn(params, CTRLNODE_ROOT);
+    const prompt = augmentPromptForRepoMode(params.prompt, params);
+    logger.info('codex_sdk.repo_mode', {
+      taskId: params.taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd: dispatch.spawnCwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+    await this._run(
+      params.taskId,
+      prompt,
+      callbacks,
+      params.agentId,
+      params.taskFolderName,
+      agentInfo?.description,
+      agentInfo?.model,
+      dispatch,
+    );
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
@@ -63,7 +102,7 @@ export class CodexSdkProvider implements IProvider {
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
     // Incoming paths from SaaS already include the "tasks/" prefix — return
     // ctrlnode root so path.join(base, relPath) resolves correctly.
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -78,6 +117,12 @@ export class CodexSdkProvider implements IProvider {
   async listModels(): Promise<string[]> {
     return fetchOpenAiModels();
   }
+
+  async isAvailable(): Promise<boolean> {
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
+    return checkBinaryExists('codex');
+  }
+
   // ── Internal ────────────────────────────────────────────────────────────────
 
   private async _run(
@@ -88,18 +133,20 @@ export class CodexSdkProvider implements IProvider {
     taskFolderName?: string,
     agentDescription?: string,
     agentModel?: string,
+    dispatch?: RepoDispatchSpawnContext,
   ): Promise<void> {
-    // cwd = AGENTS_CTRLNODE_ROOT so relative paths in prompts like
-    // "tasks/codex/05-05/{id}/output/" resolve correctly without duplication.
-    const providerTasksRoot = resolveProjectHome(taskFolderName);
-    fs.mkdirSync(providerTasksRoot, { recursive: true });
-    const spawnCwd = AGENTS_CTRLNODE_ROOT;
+    const { taskFolder, outputFolder } = resolveTaskPaths(taskFolderName, taskId);
+    const ctx = dispatch ?? {
+      isRepoMode: false,
+      taskFolder,
+      outputFolder,
+      spawnCwd: CTRLNODE_ROOT,
+      taskLogAbsolutePath: null,
+      extraDirectories: [taskFolder],
+    };
+    const { spawnCwd, extraDirectories } = ctx;
+    fs.mkdirSync(spawnCwd, { recursive: true });
     const timeoutMs = CODEX_TIMEOUT_MINUTES * 60_000;
-
-    // taskFolder = full absolute path to this task's folder
-    const taskFolder = taskFolderName
-      ? path.join(AGENTS_CTRLNODE_ROOT, taskFolderName)
-      : providerTasksRoot;
 
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
@@ -127,7 +174,8 @@ export class CodexSdkProvider implements IProvider {
     // CODEX_BIN_PATH lets operators point the SDK at a system-installed `codex`
     // binary (e.g. /usr/local/bin/codex) instead of relying on the npm optional
     // platform packages that don't exist inside the compiled Bun single-binary.
-    const codexBinPath = process.env.CODEX_BIN_PATH || undefined;
+    // If not set, fall back to resolving `codex` from the system PATH.
+    const codexBinPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
     logger.info('codex_sdk.config', {
       taskId,
       codexBinPath: codexBinPath ?? '(not set — will use findCodexPath)',
@@ -207,7 +255,7 @@ export class CodexSdkProvider implements IProvider {
         // Never ask for approval — equivalent to --approval-mode yolo in CLI providers
         approvalPolicy: 'never',
         // Ensure the task output folder is writable even if outside cwd
-        additionalDirectories: [taskFolder],
+        additionalDirectories: extraDirectories,
         // Pass the model when configured; if undefined the CLI uses its own
         // default (from config.toml or the CODEX_DEFAULT_MODEL env var).
         ...(effectiveModel ? { model: effectiveModel } : {}),
@@ -398,15 +446,15 @@ function ensureWorkspaceTrusted(codexHomePath: string): void {
     if (!fs.existsSync(configPath)) return;
     const content = fs.readFileSync(configPath, 'utf8');
     let extra = '';
-    if (!content.toLowerCase().includes(AGENTS_CTRLNODE_ROOT.toLowerCase())) {
-      extra += `\n[projects.'${AGENTS_CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
+    if (!content.toLowerCase().includes(CTRLNODE_ROOT.toLowerCase())) {
+      extra += `\n[projects.'${CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
     }
     if (!content.toLowerCase().includes('[windows]')) {
       extra += `\n[windows]\nsandbox = "unelevated"\n`;
     }
     if (extra) {
       fs.appendFileSync(configPath, extra, 'utf8');
-      logger.info('codex_agent_home.workspace_trusted', { codexHomePath, root: AGENTS_CTRLNODE_ROOT });
+      logger.info('codex_agent_home.workspace_trusted', { codexHomePath, root: CTRLNODE_ROOT });
     }
   } catch (e) {
     logger.warn('codex_agent_home.workspace_trust_failed', { codexHomePath, err: String(e) });

@@ -81,14 +81,15 @@ describe('handleListFiles', () => {
 // ── handleReadFile ───────────────────────────────────────────────────────────
 
 describe('handleReadFile', () => {
-  test('calls provider.resolveFilesystemBase with agentId and useCtrlnode', () => {
+  test('calls provider.resolveFilesystemBase with agentId and useCtrlnode when no provider field', () => {
     const provider = makeProvider(tmpDir);
     const ctx = makeCtx(provider);
     fs.writeFileSync(path.join(tmpDir, 'test.txt'), 'content', 'utf8');
 
-    handleReadFile({ action: 'read_file', agentId: 'local', useCtrlnode: true, requestId: 'r1', path: 'test.txt' } as any, ctx as any);
+    // useCtrlnode=false + no msg.provider → resolveBase delegates to resolveFilesystemBase
+    handleReadFile({ action: 'read_file', agentId: 'local', useCtrlnode: false, requestId: 'r1', path: 'test.txt' } as any, ctx as any);
 
-    expect(provider.resolveFilesystemBase).toHaveBeenCalledWith('local', true);
+    expect(provider.resolveFilesystemBase).toHaveBeenCalledWith('local', false);
   });
 
   test('responds BASE_PATH_NOT_FOUND when provider returns null', () => {

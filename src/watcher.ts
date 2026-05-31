@@ -13,9 +13,9 @@
 import path from 'path';
 import fs from 'fs';
 import chokidar from 'chokidar';
-import { WATCHER_USE_POLLING, WATCHER_POLL_INTERVAL } from './config';
-import { isMountedVolumeLikely, safeReadFile } from './fileSystem';
-import { logger } from './logger';
+import { WATCHER_USE_POLLING, WATCHER_POLL_INTERVAL } from './config.js';
+import { isMountedVolumeLikely, safeReadFile } from './fileSystem.js';
+import { logger } from './logger.js';
 
 // ── Regex patterns ───────────────────────────────────────────────────────────
 

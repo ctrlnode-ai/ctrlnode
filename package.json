@@ -1,19 +1,21 @@
 {
-  "name": "ctrlnode-bridge",
-  "version": "2.0.0",
-  "description": "CtrlNode Bridge — connects your local OpenClaw instance to CtrlNode SaaS",
-  "main": "src/bridge/index.ts",
+  "name": "ctrlnode-ai-bridge",
+  "version": "2026.2.2",
+  "description": "CtrlNode.ai Agent Bridge",
+  "main": "index.ts",
   "scripts": {
-    "start": "bun run src/bridge/index.ts",
-    "dev": "bun run --watch src/bridge/index.ts",
-    "build:linux": "bun build ./src/bridge/index.ts --compile --target=bun-linux-x64 --outfile=dist/ctrlnode-bridge-linux-x64",
-    "build:linux-baseline": "bun build ./src/bridge/index.ts --compile --target=bun-linux-x64-baseline --outfile=dist/ctrlnode-bridge-linux-x64-baseline",
-    "build:mac": "bun build ./src/bridge/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/ctrlnode-bridge-darwin-arm64",
-    "build:win": "bun build ./src/bridge/index.ts --compile --target=bun-windows-x64 --outfile=dist/ctrlnode-bridge.exe",
-    "build:all": "bun run build:linux && bun run build:linux-baseline && bun run build:mac && bun run build:win",
-    "typecheck": "npx tsc --noEmit"
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "build:linux": "bun run scripts/build.ts --target=bun-linux-x64 --outfile=ctrlnode-linux-x64",
+    "build:linux:baseline": "bun run scripts/build.ts --target=bun-linux-x64-baseline --outfile=ctrlnode-linux-x64-baseline",
+    "build:mac": "bun run scripts/build.ts --target=bun-darwin-arm64 --outfile=ctrlnode-darwin-arm64",
+    "build:win": "bun run scripts/build.ts --target=bun-windows-x64 --outfile=ctrlnode.exe"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.21.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.128",
+    "@cursor/sdk": "^1.0.11",
+    "@openai/codex-sdk": "^0.128.0",
     "chokidar": "^3.5.3",
     "ws": "^8.16.0"
   },

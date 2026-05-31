@@ -4,17 +4,18 @@ import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   GEMINI_TIMEOUT_MINUTES,
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils';
-import { GEMINI_KNOWN_MODELS } from './knownModels';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { GEMINI_KNOWN_MODELS } from './knownModels.js';
 
 export class GeminiAcpProvider implements IProvider {
   readonly providerName = 'gemini';
@@ -27,11 +28,28 @@ export class GeminiAcpProvider implements IProvider {
   }
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
-    await this._runAcp(params.taskId, params.prompt, params.workingDir, callbacks, params.taskFolderName, params.agentId);
+    const providerTasksRoot = resolveProjectHome(params.taskFolderName);
+    const dispatch = resolveRepoDispatchSpawn(params, CTRLNODE_ROOT);
+    const prompt = augmentPromptForRepoMode(params.prompt, params);
+    logger.info('gemini_acp.repo_mode', {
+      taskId: params.taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd: dispatch.spawnCwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+    await this._runAcp(
+      params.taskId,
+      prompt,
+      dispatch.spawnCwd,
+      callbacks,
+      params.taskFolderName,
+      params.agentId,
+      providerTasksRoot,
+    );
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
-    await this._runAcp(params.taskId, params.message, undefined, callbacks, undefined, params.agentId);
+    await this._runAcp(params.taskId, params.message, CTRLNODE_ROOT, callbacks, undefined, params.agentId);
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
@@ -45,7 +63,7 @@ export class GeminiAcpProvider implements IProvider {
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
     // Incoming paths from SaaS are already relative to workspace root (e.g. "tasks/prj/05-01/abc/input/...").
     // Return the ctrlnode root so path.join(base, relPath) resolves correctly.
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -56,6 +74,11 @@ export class GeminiAcpProvider implements IProvider {
   resolveWorkspaceCreationBase(_useCtrlnode: boolean): string | null {
     // Gemini ACP does not support SaaS-initiated workspace creation.
     return null;
+  }
+
+  async isAvailable(): Promise<boolean> {
+    const { checkBinaryExists } = await import('./providerHealthUtils.js');
+    return checkBinaryExists('gemini');
   }
 
   async listModels(): Promise<string[]> {
@@ -86,18 +109,14 @@ export class GeminiAcpProvider implements IProvider {
   private async _runAcp(
     taskId: string,
     prompt: string,
-    workingDir: string | undefined,
+    spawnCwd: string,
     callbacks: TaskCallbacks,
     taskFolderName?: string,
     agentId?: string,
+    geminiMdRoot?: string,
   ): Promise<void> {
-    // Run from AGENTS_CTRLNODE_ROOT so that relative paths in task prompts
-    // like "tasks/geminip/05-05/{id}/output/" resolve correctly.
-    // providerTasksRoot (tasks/{project}) is kept for GEMINI.md placement and
-    // trusted-dir registration so Gemini loads agent context.
-    const providerTasksRoot = resolveProjectHome(taskFolderName);
+    const providerTasksRoot = geminiMdRoot ?? resolveProjectHome(taskFolderName);
     fs.mkdirSync(providerTasksRoot, { recursive: true });
-    const spawnCwd = AGENTS_CTRLNODE_ROOT;
     const timeoutMs = GEMINI_TIMEOUT_MINUTES * 60_000;
 
     // Per-agent model: use the model registered in the UI if explicitly set.
@@ -132,7 +151,7 @@ export class GeminiAcpProvider implements IProvider {
     // Ensure the task folder is in Gemini's trusted directories so that
     // --approval-mode yolo is honoured and project agents are loaded.
     trustGeminiDirectory(providerTasksRoot, taskId);
-    trustGeminiDirectory(AGENTS_CTRLNODE_ROOT, taskId);
+    trustGeminiDirectory(CTRLNODE_ROOT, taskId);
 
     logger.debug('gemini_acp.spawn', { taskId, cwd: spawnCwd, args: acpArgs, geminiMd: wroteGeminiMd });
 
@@ -177,13 +196,13 @@ export class GeminiAcpProvider implements IProvider {
     let accumulatedText = '';
     const writtenFiles: string[] = [];
 
-    // acpSandbox: AGENTS_CTRLNODE_ROOT so Gemini can read any file in the shared
+    // acpSandbox: CTRLNODE_ROOT so Gemini can read any file in the shared
     // ctrlnode folder, not just the task subfolder.
-    const acpSandbox = path.resolve(AGENTS_CTRLNODE_ROOT);
+    const acpSandbox = path.resolve(CTRLNODE_ROOT);
 
-    // mcpRoot: AGENTS_CTRLNODE_ROOT so the MCP filesystem server exposes the full
+    // mcpRoot: CTRLNODE_ROOT so the MCP filesystem server exposes the full
     // ctrlnode tree and relative paths like tasks/geminip/05-05/... resolve correctly.
-    const mcpRoot = path.resolve(AGENTS_CTRLNODE_ROOT);
+    const mcpRoot = path.resolve(CTRLNODE_ROOT);
 
     const client: acp.Client = {
       async requestPermission(params) {
@@ -389,7 +408,7 @@ ${userPrompt}`;
 // ── Output file writers / status detection → providerFileUtils.ts ────────────
 
 /**
- * Ensure `dir` (and AGENTS_CTRLNODE_ROOT) appear in ~/.gemini/trustedFolders.json
+ * Ensure `dir` (and CTRLNODE_ROOT) appear in ~/.gemini/trustedFolders.json
  * with value "TRUST_FOLDER", and that security.folderTrust.enabled is set in
  * ~/.gemini/settings.json — so Gemini CLI honours --approval-mode yolo and loads
  * GEMINI.md / project agents from the task folder.
@@ -429,7 +448,7 @@ function trustGeminiDirectory(dir: string, taskId: string): void {
       try { trusted = JSON.parse(fs.readFileSync(trustPath, 'utf8')); } catch { /* keep empty */ }
     }
 
-    const toTrust = [path.resolve(dir), path.resolve(AGENTS_CTRLNODE_ROOT)];
+    const toTrust = [path.resolve(dir), path.resolve(CTRLNODE_ROOT)];
     const added: string[] = [];
     for (const d of toTrust) {
       const key = normalizeTrustKey(d);

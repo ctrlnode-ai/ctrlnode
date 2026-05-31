@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-import { readBootstrapPreamble, readWorkspaceContext, wipeAgentSessions } from '../fileSystem';
+import { listDirShallow, listDirShallowEntries, readBootstrapPreamble, readWorkspaceContext, walkDir, wipeAgentSessions } from '../fileSystem';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,32 @@ describe('readBootstrapPreamble', () => {
     expect(readBootstrapPreamble(tmpDir)).toBe(body.trim());
   });
 
+});
+
+describe('listDirShallow vs walkDir', () => {
+  test('listDirShallow returns only immediate child directories', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src', 'nested'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'readme.txt'), 'hi', 'utf8');
+
+    const shallow = listDirShallow(tmpDir);
+    const walked = walkDir(tmpDir);
+
+    expect(shallow.map((e) => e.path).sort()).toEqual(['docs', 'src']);
+    expect(walked.some((e) => e.path === 'src/nested')).toBe(true);
+    expect(shallow.some((e) => e.path === 'src/nested')).toBe(false);
+  });
+
+  test('listDirShallowEntries returns immediate files and directories', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'readme.txt'), 'hi', 'utf8');
+
+    const entries = listDirShallowEntries(tmpDir);
+    const paths = entries.map((e) => e.path).sort();
+    expect(paths).toEqual(['readme.txt', 'src']);
+    expect(entries.find((e) => e.path === 'readme.txt')?.type).toBe('file');
+    expect(entries.find((e) => e.path === 'src')?.type).toBe('dir');
+  });
 });
 
 // ── wipeAgentSessions ──────────────────────────────────────────────────────────

@@ -3,17 +3,18 @@ import { spawn } from 'child_process';
 import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
   COPILOT_TIMEOUT_MINUTES,
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils';
-import { COPILOT_KNOWN_MODELS } from './knownModels';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils.js';
+import { COPILOT_KNOWN_MODELS } from './knownModels.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';
@@ -30,10 +31,19 @@ export class CopilotAcpProvider implements IProvider {
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
     const agentInfo = discoveredAgents[params.agentId];
     if (agentInfo?.model) callbacks.onModelDiscovered?.(agentInfo.model);
-    const effectivePrompt = agentInfo?.description
+    const providerTasksRoot = resolveProjectHome(params.taskFolderName);
+    const dispatch = resolveRepoDispatchSpawn(params, providerTasksRoot);
+    let effectivePrompt = agentInfo?.description
       ? `${agentInfo.description}\n\n---\n\n${params.prompt}`
       : params.prompt;
-    await this._runAcp(params.taskId, effectivePrompt, callbacks, params.taskFolderName);
+    effectivePrompt = augmentPromptForRepoMode(effectivePrompt, params);
+    logger.info('copilot_acp.repo_mode', {
+      taskId: params.taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd: dispatch.spawnCwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+    await this._runAcp(params.taskId, effectivePrompt, callbacks, params.taskFolderName, dispatch.spawnCwd);
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
@@ -57,7 +67,7 @@ export class CopilotAcpProvider implements IProvider {
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
     // Incoming paths from SaaS are already relative to workspace root (e.g. "tasks/prj/05-01/abc/input/...").
     // Return the ctrlnode root so path.join(base, relPath) resolves correctly.
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -83,18 +93,14 @@ export class CopilotAcpProvider implements IProvider {
     prompt: string,
     callbacks: TaskCallbacks,
     taskFolderName?: string,
+    spawnCwd?: string,
   ): Promise<void> {
-    // Run from the project-level home (tasks/{project}) so Copilot has full project
-    // context as its working directory. workspace_path is an OpenClaw concept and
-    // does not apply here.
     const providerTasksRoot = resolveProjectHome(taskFolderName);
-    fs.mkdirSync(providerTasksRoot, { recursive: true });
+    const cwd = spawnCwd ?? providerTasksRoot;
+    fs.mkdirSync(cwd, { recursive: true });
 
-    // Derive the task-specific output folder so the prompt tells Copilot exactly
-    // where to write files (avoids the doubled-segment bug where Copilot appended
-    // the full taskFolderName onto providerTasksRoot a second time).
     const taskFolder = taskFolderName
-      ? path.join(AGENTS_CTRLNODE_ROOT, taskFolderName)
+      ? path.join(CTRLNODE_ROOT, taskFolderName)
       : providerTasksRoot;
     const taskOutputFolder = path.join(taskFolder, 'output');
     fs.mkdirSync(taskOutputFolder, { recursive: true });
@@ -104,10 +110,10 @@ export class CopilotAcpProvider implements IProvider {
     const cmd  = isWindows ? 'cmd.exe' : 'copilot';
     const args = isWindows ? ['/c', 'copilot', '--acp', '--stdio'] : ['--acp', '--stdio'];
 
-    logger.info('copilot_acp.spawn', { taskId, cwd: providerTasksRoot });
+    logger.info('copilot_acp.spawn', { taskId, cwd });
 
     const proc = spawn(cmd, args, {
-      cwd: providerTasksRoot,
+      cwd,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'inherit'],
       shell: false,
@@ -132,9 +138,11 @@ export class CopilotAcpProvider implements IProvider {
     let accumulatedText = '';
     const writtenFiles: string[] = [];
 
-    // fsRoot: sandbox root for path resolution — scoped to providerTasksRoot so the
-    // agent can read project-level context files as well as write to the task folder.
-    const fsRoot = path.resolve(providerTasksRoot);
+    // Repo mode: spawn cwd is the product repo — widen FS sandbox to ctrlnode so the
+    // agent can write the mandatory task log under tasks/.../output/.
+    const fsRoot = path.resolve(
+      path.resolve(cwd) !== path.resolve(providerTasksRoot) ? CTRLNODE_ROOT : providerTasksRoot,
+    );
 
     const client: acp.Client = {
       async requestPermission(params) {
@@ -217,7 +225,7 @@ export class CopilotAcpProvider implements IProvider {
       });
 
       const session = await connection.newSession({
-        cwd: providerTasksRoot,
+        cwd,
         mcpServers: [
           {
             name: 'filesystem',

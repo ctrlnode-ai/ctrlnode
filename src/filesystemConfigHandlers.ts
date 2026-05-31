@@ -1,23 +1,23 @@
 import fs from 'fs';
 import path from 'path';
 
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { OPENCLAW_CONFIG, ctrlnodePath, AGENTS_CTRLNODE_ROOT } from './config';
-import { ensureDir, readFileForBridge, walkDir, sanitizeRelPath } from './fileSystem';
-import { suppressFileChangedForAgentPaths } from './watcher';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT, BASE_PATH } from './config.js';
+import { ensureDir, readFileForBridge, walkDir, listDirShallow, listDirShallowEntries, sanitizeRelPath } from './fileSystem.js';
+import { suppressFileChangedForAgentPaths } from './watcher.js';
 import {
   discoveredAgents,
   isAgentInCtrlnode,
-} from './agentDiscovery';
-import { resolveTargetAgentId } from './agentRouting';
+} from './agentDiscovery.js';
+import { resolveTargetAgentId } from './agentRouting.js';
 
 // Re-exports so existing callers (messageHandlers, CodexSdkProvider) keep working.
-export { getCodexAgentHome, setupCodexAgentHome } from './codexAgentHome';
-export { handleSyncProviderAgents, handleDeleteAgentFolders, handleDeleteAgentConfig, handleUpdateAgentConfig } from './agentRegistrationHandlers';
-export type { SyncableProvider } from './agentRegistrationHandlers';
-export { handleActivatePipelineTask } from './pipelineTaskHandler';
+export { getCodexAgentHome, setupCodexAgentHome } from './codexAgentHome.js';
+export { handleSyncProviderAgents, handleDeleteAgentFolders, handleDeleteAgentConfig, handleUpdateAgentConfig } from './agentRegistrationHandlers.js';
+export type { SyncableProvider } from './agentRegistrationHandlers.js';
+export { handleActivatePipelineTask } from './pipelineTaskHandler.js';
 
 /** Files written only for scaffold/tooling purposes — should not trigger task completion. */
 const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep']);
@@ -26,27 +26,27 @@ const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.kee
  * Resolves the filesystem base path for a Bridge message.
  *
  * When `useCtrlnode=true` and the message specifies a provider that is not
- * active in this Bridge instance, falls back to AGENTS_CTRLNODE_ROOT.
+ * active in this Bridge instance, falls back to CTRLNODE_ROOT.
  * All non-OpenClaw providers share this root, so a Copilot-only Bridge can
  * still read/write Gemini task folders (same physical path).
  */
 function resolveBase(msg: BridgeMessage, ctx: HandlerContext, targetId: string | undefined): string | null {
+  if (msg.useBasePath) return BASE_PATH;
   const useCtrlnode = msg.useCtrlnode ?? false;
   if (msg.provider) {
-    const base = ctx.provider.resolveFilesystemBaseByProvider(msg.provider, useCtrlnode);
+    const base = ctx.provider.resolveFilesystemBaseByProvider(msg.provider, useCtrlnode, targetId);
     if (base !== null) return base;
-    // Provider not active in this Bridge instance.
-    // When useCtrlnode=true every non-OpenClaw provider maps to the same root.
+    // Provider not active in this Bridge instance — fall back to shared root.
     if (useCtrlnode) {
-      logger.debug('resolveBase.provider_fallback', {
-        msgProvider: msg.provider,
-        agentId: targetId,
-        fallback: AGENTS_CTRLNODE_ROOT,
-      });
-      return AGENTS_CTRLNODE_ROOT;
+      logger.debug('resolveBase.provider_fallback', { msgProvider: msg.provider, agentId: targetId, fallback: CTRLNODE_ROOT });
+      return CTRLNODE_ROOT;
     }
     return null;
   }
+  // No provider specified + useCtrlnode=true → always use CTRLNODE_ROOT.
+  // This handles proxy reads from the SaaS where the proxy agent may be OpenClaw
+  // but the files live in the shared .ctrlnode folder (Cursor, Claude, Gemini, etc.).
+  if (useCtrlnode) return CTRLNODE_ROOT;
   return ctx.provider.resolveFilesystemBase(targetId, useCtrlnode);
 }
 
@@ -206,9 +206,22 @@ export function handleListFiles(msg: BridgeMessage, ctx: HandlerContext): void {
   }
 
   logger.debug('list_files.attempt', { agentId: targetId, absDir: targetDir, subpath: subpath || '/', exists: fs.existsSync(targetDir) });
-  const files = walkDir(targetDir, basePath);
-  logger.debug('list_files', { agentId: targetId, subpath: subpath || '/', entries: files.length });
-  ctx.sendToSaas({ action: 'list_files_response', requestId, files, error: null });
+  const files = msg.useBasePath
+    ? (msg.recursive
+      ? walkDir(targetDir, basePath)
+      : msg.shallowIncludeFiles
+        ? listDirShallowEntries(targetDir, basePath)
+        : listDirShallow(targetDir, basePath))
+    : walkDir(targetDir, basePath);
+  logger.debug('list_files', {
+    agentId: targetId,
+    subpath: subpath || '/',
+    entries: files.length,
+    shallow: !!msg.useBasePath,
+    shallowIncludeFiles: !!msg.shallowIncludeFiles,
+    recursive: !!msg.recursive,
+  });
+  ctx.sendToSaas({ action: 'list_files_response', requestId, files, basePath: baseDir, error: null });
 }
 
 export function handleCreateWorkspace(msg: BridgeMessage, ctx: HandlerContext): void {

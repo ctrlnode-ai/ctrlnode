@@ -1,13 +1,14 @@
-import { IProvider } from './IProvider';
-import { OpenClawProvider } from './OpenClawProvider';
-import { ClaudeCodeProvider } from './ClaudeCodeProvider';
-import { ClaudeAgentSdkProvider } from './ClaudeAgentSdkProvider';
-import { CopilotAcpProvider } from './CopilotAcpProvider';
-import { GeminiAcpProvider } from './GeminiAcpProvider';
-import { CodexSdkProvider } from './CodexSdkProvider';
-import { CursorSdkProvider } from './CursorSdkProvider';
+import { IProvider } from './IProvider.js';
+import { OpenClawProvider } from './OpenClawProvider.js';
+import { ClaudeCodeProvider } from './ClaudeCodeProvider.js';
+import { ClaudeAgentSdkProvider } from './ClaudeAgentSdkProvider.js';
+import { CopilotAcpProvider } from './CopilotAcpProvider.js';
+import { GeminiAcpProvider } from './GeminiAcpProvider.js';
+import { CodexSdkProvider } from './CodexSdkProvider.js';
+import { CursorSdkProvider } from './CursorSdkProvider.js';
+import { HermesAcpProvider } from './HermesAcpProvider.js';
 
-const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor']);
+const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes']);
 
 export function createProvider(name: string): IProvider {
   if (!KNOWN_PROVIDERS.has(name)) {
@@ -20,6 +21,7 @@ export function createProvider(name: string): IProvider {
   if (name === 'gemini')       return new GeminiAcpProvider();
   if (name === 'codex')        return new CodexSdkProvider();
   if (name === 'cursor')       return new CursorSdkProvider();
+  if (name === 'hermes')       return new HermesAcpProvider();
   return new OpenClawProvider();
 }
 

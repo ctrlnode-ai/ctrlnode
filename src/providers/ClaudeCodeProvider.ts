@@ -1,14 +1,13 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
-import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_TIMEOUT_MINUTES, CLAUDE_SKIP_PERMISSIONS, AGENTS_CTRLNODE_ROOT, resolveProjectHome } from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
+import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_TIMEOUT_MINUTES, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome } from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 
-/** Ctrlnode workspace root — base for all task and workspace paths. */
-const CTRLNODE_ROOT = AGENTS_CTRLNODE_ROOT;
 
 /**
  * Writes (or overwrites) CLAUDE.md in the task folder with the agent's role and
@@ -77,18 +76,13 @@ export class ClaudeCodeProvider implements IProvider {
 
     logger.info('claude_provider.dispatch', { provider: 'claude', taskId, agentId, model: agentModel ?? '(default)' });
 
-    // Ensure the task folder and output dir exist so Claude can write results.
-    // taskFolder  = …/ctrlnode/tasks/{project}/{date}/{taskId-slug}
-    // providerTasksRoot = …/ctrlnode/tasks/{project}  — cwd so Claude sees the full project tree
-    const taskFolder = taskFolderName
-      ? path.join(CTRLNODE_ROOT, taskFolderName)
-      : path.join(CTRLNODE_ROOT, 'tasks', taskId || `task-${Date.now()}`);
     const providerTasksRoot = resolveProjectHome(taskFolderName);
-    const outputFolder = path.join(taskFolder, 'output');
+    const dispatch = resolveRepoDispatchSpawn(params, providerTasksRoot);
+    const { taskFolder, outputFolder, spawnCwd: cwd } = dispatch;
     fs.mkdirSync(outputFolder, { recursive: true });
 
     const taskSlug = path.basename(taskFolder);
-    const relativeOutputFolder = path.relative(providerTasksRoot, outputFolder).replace(/\\/g, '/');
+    const relativeOutputFolder = path.relative(cwd, outputFolder).replace(/\\/g, '/');
 
     // Write CLAUDE.md with role, instructions, and exact output paths for this task.
     writeAgentsMd(taskFolder, agentInfo?.role, agentInfo?.description, relativeOutputFolder, taskSlug, taskId);
@@ -101,13 +95,21 @@ export class ClaudeCodeProvider implements IProvider {
       : [];
     const inputFile = inputFiles.length > 0 ? path.join(inputDir, inputFiles[0]) : null;
     const stdinContent = inputFile ? fs.readFileSync(inputFile, 'utf-8') : null;
-    const dispatchPrompt = stdinContent != null
-      ? 'Execute the task provided in stdin.'
-      : prompt;
+    const dispatchPrompt = augmentPromptForRepoMode(
+      stdinContent != null ? 'Execute the task provided in stdin.' : prompt,
+      params,
+    );
+
+    logger.info('claude_provider.repo_mode', {
+      taskId,
+      isRepoMode: dispatch.isRepoMode,
+      cwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
 
     await this._spawnClaude({
       taskId,
-      cwd: providerTasksRoot,
+      cwd,
       prompt: dispatchPrompt,
       stdinContent,
       addDir: taskFolder,
@@ -146,7 +148,7 @@ export class ClaudeCodeProvider implements IProvider {
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
     // SaaS always sends subpath like "tasks/x/y", so base = ctrlnode root.
     // The handlers' sanitizeRelPath + path.resolve guard prevents traversal above this root.
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -160,9 +162,16 @@ export class ClaudeCodeProvider implements IProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const { fetchAnthropicModels } = await import('./providerFileUtils');
-    const { ANTHROPIC_API_KEY } = await import('../config');
+    const { fetchAnthropicModels } = await import('./providerFileUtils.js');
+    const { ANTHROPIC_API_KEY } = await import('../config.js');
     return fetchAnthropicModels(ANTHROPIC_API_KEY);
+  }
+
+  async isAvailable(): Promise<boolean> {
+    const { CLAUDE_SDK_EXECUTABLE } = await import('../config.js');
+    if (!CLAUDE_SDK_EXECUTABLE) return false;
+    const fs_ = await import('fs');
+    return fs_.existsSync(CLAUDE_SDK_EXECUTABLE);
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────

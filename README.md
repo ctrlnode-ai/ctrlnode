@@ -9,7 +9,7 @@
 ### Orchestrate AI coding agents — tasks, routines, and workflows — from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.1-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
+[![Release](https://img.shields.io/badge/release-v2.2-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
 [![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMEExMCAxMCAwIDAgMCAxMiAyeiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://ctrlnode.ai)
 
 [Website](https://ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases) · [Bridge setup](src/bridge/README.md)
@@ -24,11 +24,13 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 
 ---
 
-## What's new in v2.1
+## What's new in v2.2 and 2.3
 
-- **Routines** — schedule recurring tasks on a cron-style cadence; agents run automatically and report back through the same live stream
-- **Multi-agent Workflows** — build multi-step agent workflows that start on a schedule, a webhook, or when another workflow completes
+- **Hermes provider** — native support for Hermes agents via ACP; each agent gets its own isolated profile
+- **Binary renamed** — `ctrlnode-bridge` is now just `ctrlnode`; install scripts update PATH automatically
+- **Setup wizard** — run `ctrlnode --setup` to configure workspace and pairing token interactively; config is saved and reused on every subsequent run
 - **Model selection** — choose the exact AI model per agent (claude-sonnet-4-6, gpt-5.5, gemini-3.1-pro, …); the Bridge reports available models on connect and the UI surfaces them as a searchable drop-down
+- **Claude-opus-4-8** — is now included in the known-models fallback lists for Anthropic, Copilot, and Cursor providers. When no API key is configured the model is available immediately; with an API key it is returned directly from the live API.
 
 ---
 
@@ -62,18 +64,15 @@ The Bridge makes a single **outbound** WebSocket connection.  No inbound ports, 
 
 | Provider | Backend | Key env var |
 |---|---|---|
-| `claude` / `claude-sdk` | Anthropic `@anthropic-ai/claude-agent-sdk` | `ANTHROPIC_API_KEY` |
+| `claude` | Anthropic `@anthropic-ai/claude-agent-sdk` | `ANTHROPIC_API_KEY` |
 | `copilot` | GitHub Copilot (ACP protocol) | *(Copilot extension)* |
 | `gemini` | Google Gemini CLI (ACP protocol) | `GEMINI_API_KEY` |
 | `codex` | OpenAI `@openai/codex-sdk` | `CODEX_API_KEY` |
 | `cursor` | Cursor `@cursor/sdk` | `CURSOR_API_KEY` |
+| `hermes` | Hermes (ACP protocol) | *(Hermes CLI)* |
 | `openclaw` | OpenClaw HTTP gateway | `OPENCLAW_GATEWAY_TOKEN` |
 
-Run multiple providers from one Bridge process:
-
-```env
-PROVIDERS=claude-sdk,copilot,cursor
-```
+All providers run from the same Bridge process automatically — no configuration needed.
 
 ---
 
@@ -122,10 +121,10 @@ Installs to `/usr/local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\Programs\ctrlnode
 
 | Platform | Binary |
 |---|---|
-| Linux x64 (modern CPUs, AVX2) | `ctrlnode-bridge-linux-x64` |
-| Linux x64 (older CPUs / cloud VMs) | `ctrlnode-bridge-linux-x64-baseline` |
-| macOS Apple Silicon | `ctrlnode-bridge-darwin-arm64` |
-| Windows x64 | `ctrlnode-bridge.exe` |
+| Linux x64 (modern CPUs, AVX2) | `ctrlnode-linux-x64` |
+| Linux x64 (older CPUs / cloud VMs) | `ctrlnode-linux-x64-baseline` |
+| macOS Apple Silicon | `ctrlnode-darwin-arm64` |
+| Windows x64 | `ctrlnode.exe` |
 
 → [Download from Releases](https://github.com/ctrlnode-ai/ctrlnode/releases)
 
@@ -137,21 +136,27 @@ Not sure which Linux binary? Run `grep -o "avx[^ ]*" /proc/cpuinfo | head -1` �
 
 ### 3 — Run it
 
+First run — launches the setup wizard:
+
 ```
-$ ./ctrlnode-bridge
+$ ctrlnode --setup
 
-Enter your CtrlNode pairing token (app.ctrlnode.ai → Bridge Tokens): xxxxxxxxxx
+Where is your workspace? [/home/user]: /home/user/code
+Pairing token: xxxxxxxxxx
 
-Select providers to enable (Y = yes, Enter = no):
-  [ ] Enable OpenClaw?         [y/N]:
-  [ ] Enable Claude?           [y/N]:
-  [ ] Enable GitHub Copilot?   [y/N]:
-  [ ] Enable Gemini?           [y/N]:
-  [ ] Enable Codex?            [y/N]:
-  [ ] Enable Cursor?           [y/N]:
+Config saved to: /home/user/code/.ctrlnode/.env
+Run ctrlnode to start the bridge.
 ```
 
-The setup wizard asks for credentials once, saves them to a local `.env` file, and connects. On subsequent runs it reads the saved config automatically. You can also skip the wizard by setting environment variables directly — see the [per-provider guides](doc/) for the exact variable names.
+Then start the Bridge:
+
+```
+$ ctrlnode
+Reading config from: /home/user/code/.ctrlnode/.env
+...connected
+```
+
+On subsequent runs the Bridge reads the saved config automatically. Run `ctrlnode --setup` again to change workspace or pairing token.
 
 Your agents appear in the web UI automatically. Create a task, assign it, and watch it run live from your browser.
 
@@ -203,6 +208,7 @@ Create a Routine to run a task on a repeating schedule (daily summary, nightly r
 - [doc/gemini.md](doc/gemini.md) — Google Gemini CLI (ACP)
 - [doc/codex.md](doc/codex.md) — OpenAI Codex SDK
 - [doc/cursor.md](doc/cursor.md) — Cursor SDK
+- [doc/hermes.md](doc/hermes.md) — Hermes (ACP)
 - [doc/openclaw.md](doc/openclaw.md) — OpenClaw runtime
 
 ---

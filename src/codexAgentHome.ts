@@ -10,14 +10,14 @@
 
 import fs from 'fs';
 import path from 'path';
-import { AGENTS_CTRLNODE_ROOT } from './config';
-import { logger } from './logger';
+import { CTRLNODE_ROOT } from './config.js';
+import { logger } from './logger.js';
 
 /**
- * Returns the per-agent CODEX_HOME path: {AGENTS_CTRLNODE_ROOT}/.codex-agents/{agentId}/
+ * Returns the per-agent CODEX_HOME path: {CTRLNODE_ROOT}/.codex-agents/{agentId}/
  */
 export function getCodexAgentHome(agentId: string): string {
-  return path.join(AGENTS_CTRLNODE_ROOT, '.codex-agents', agentId);
+  return path.join(CTRLNODE_ROOT, '.codex-agents', agentId);
 }
 
 /**
@@ -44,8 +44,8 @@ export function setupCodexAgentHome(agentId: string, agentDescription: string): 
     if (fs.existsSync(configPath)) {
       const existing = fs.readFileSync(configPath, 'utf8');
       let extra = '';
-      if (!existing.toLowerCase().includes(AGENTS_CTRLNODE_ROOT.toLowerCase())) {
-        extra += `\n[projects.'${AGENTS_CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
+      if (!existing.toLowerCase().includes(CTRLNODE_ROOT.toLowerCase())) {
+        extra += `\n[projects.'${CTRLNODE_ROOT}']\ntrust_level = "trusted"\n`;
       }
       if (!existing.toLowerCase().includes('[windows]')) {
         extra += `\n[windows]\nsandbox = "unelevated"\n`;

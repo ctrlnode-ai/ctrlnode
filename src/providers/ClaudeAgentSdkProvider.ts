@@ -19,10 +19,10 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary } from '../types';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary } from '../types.js';
 import {
-  AGENTS_CTRLNODE_ROOT,
+  CTRLNODE_ROOT,
   resolveProjectHome,
   ANTHROPIC_API_KEY,
   CLAUDE_SDK_TOOLS,
@@ -30,13 +30,15 @@ import {
   CLAUDE_SDK_TIMEOUT_MINUTES,
   CLAUDE_SDK_PERMISSION_MODE,
   CLAUDE_SDK_EXECUTABLE,
-} from '../config';
-import { discoveredAgents } from '../agentDiscovery';
-import { logger } from '../logger';
-import { fetchAnthropicModels as _fetchAnthropicModels } from './providerFileUtils';
+} from '../config.js';
+import { discoveredAgents } from '../agentDiscovery.js';
+import { logger } from '../logger.js';
+import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs } from './providerFileUtils.js';
+import {
+  appendTaskLogToSystemParts,
+  resolveRepoDispatchSpawn,
+} from './repoDispatchContext.js';
 
-/** Ctrlnode workspace root — base for all task and workspace paths. */
-const CTRLNODE_ROOT = AGENTS_CTRLNODE_ROOT;
 
 /**
  * Writes CLAUDE.md into the task folder with the agent role and instructions.
@@ -89,14 +91,8 @@ export class ClaudeAgentSdkProvider implements IProvider {
       authMode: ANTHROPIC_API_KEY ? 'api-key' : 'local-cli-login',
     });
 
-    // taskFolder  = …/ctrlnode/tasks/{project}/{date}/{taskId-slug}
-    // cwd = AGENTS_CTRLNODE_ROOT (…/ctrlnode) so that relative paths in the prompt
-    // like "tasks/clasdk/05-05/{id}/output/" resolve correctly.
-    const taskFolder = taskFolderName
-      ? path.join(AGENTS_CTRLNODE_ROOT, taskFolderName)
-      : path.join(AGENTS_CTRLNODE_ROOT, 'tasks', taskId || `task-${Date.now()}`);
-    const providerTasksRoot = AGENTS_CTRLNODE_ROOT;
-    const outputFolder = path.join(taskFolder, 'output');
+    const dispatch = resolveRepoDispatchSpawn(params, CTRLNODE_ROOT);
+    const { taskFolder, outputFolder, spawnCwd: cwd, isRepoMode, extraDirectories } = dispatch;
     fs.mkdirSync(outputFolder, { recursive: true });
 
     // Write CLAUDE.md so SDK picks up role/instructions for this agent.
@@ -130,17 +126,28 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const systemParts: string[] = [];
     if (claudeMdContent) systemParts.push(claudeMdContent);
     if (instructionsBlock) systemParts.push(instructionsBlock);
+    appendTaskLogToSystemParts(systemParts, params);
     const systemBlock = systemParts.length > 0 ? systemParts.join('\n\n---\n\n') : undefined;
 
     const fullPrompt = systemBlock
       ? `<system>\n${systemBlock}\n</system>\n\n${basePrompt}`
       : basePrompt;
 
+    const additionalDirectories = isRepoMode ? extraDirectories : [taskFolder];
+
+    logger.info('claude_sdk_provider.repo_mode', {
+      taskId,
+      isRepoMode,
+      cwd,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
+
     await this._runQuery({
       taskId,
-      cwd: providerTasksRoot,
+      taskFolderName: taskFolderName ?? undefined,
+      cwd,
       prompt: fullPrompt,
-      additionalDirectories: [taskFolder],
+      additionalDirectories,
       appendSystemPrompt: systemBlock,
       model: agentModel,
       persistSession: false, // one-shot dispatch — no session saved to disk
@@ -163,7 +170,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const claudeMdPath = path.join(taskFolder, 'CLAUDE.md');
     const claudeMdContent = fs.existsSync(claudeMdPath) ? fs.readFileSync(claudeMdPath, 'utf-8').trim() : undefined;
 
-    const providerTasksRoot = AGENTS_CTRLNODE_ROOT;
+    const providerTasksRoot = CTRLNODE_ROOT;
     fs.mkdirSync(providerTasksRoot, { recursive: true });
 
     const { taskBody: sessionBody, instructionsBlock: sessionInstructions } = splitPromptInstructions(message);
@@ -197,7 +204,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
   async deleteAgent(_agentId: string): Promise<boolean> { return false; }
 
   resolveFilesystemBase(_agentId: string | undefined, _useCtrlnode: boolean): string | null {
-    return AGENTS_CTRLNODE_ROOT;
+    return CTRLNODE_ROOT;
   }
 
   resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null {
@@ -211,10 +218,17 @@ export class ClaudeAgentSdkProvider implements IProvider {
   async listModels(): Promise<string[]> {
     return _fetchAnthropicModels(ANTHROPIC_API_KEY);
   }
+
+  async isAvailable(): Promise<boolean> {
+    if (!CLAUDE_SDK_EXECUTABLE) return false;
+    return fs.existsSync(CLAUDE_SDK_EXECUTABLE);
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
 
   private async _runQuery(opts: {
     taskId: string;
+    taskFolderName?: string;
     cwd: string;
     prompt: string;
     resumeSessionId?: string;
@@ -225,7 +239,19 @@ export class ClaudeAgentSdkProvider implements IProvider {
     outputFolder?: string;
     callbacks: TaskCallbacks;
   }): Promise<void> {
-    const { taskId, cwd, prompt, resumeSessionId, additionalDirectories, appendSystemPrompt, model, persistSession, outputFolder, callbacks } = opts;
+    const {
+      taskId,
+      taskFolderName,
+      cwd,
+      prompt,
+      resumeSessionId,
+      additionalDirectories,
+      appendSystemPrompt,
+      model,
+      persistSession,
+      outputFolder,
+      callbacks,
+    } = opts;
 
     // Prepare agent_log.md — stream assistant messages into it as they arrive.
     const agentLogPath = outputFolder ? path.join(outputFolder, 'agent_log.md') : null;
@@ -268,10 +294,16 @@ export class ClaudeAgentSdkProvider implements IProvider {
       persistSession,
       appendSystemPrompt: appendSystemPrompt ? appendSystemPrompt.slice(0, 120).replace(/\n/g, '\\n') : null,
     });
+    logger.debug('claude_sdk_provider.query_start_full', {
+      taskId,
+      prompt,
+      appendSystemPrompt: appendSystemPrompt ?? null,
+    });
 
     let sessionId: string | undefined;
     let completedStatus: string | undefined;
     let completedReason: string | undefined;
+    let accumulatedText = '';
     let lastProcessedFullText = '';
     let currentMessageUuid: string | undefined;
 
@@ -345,6 +377,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
             }
 
             if (delta) {
+              accumulatedText += delta;
               if (agentLogPath) {
                 try { fs.appendFileSync(agentLogPath, delta, 'utf-8'); } catch { /* ignore */ }
               }
@@ -380,9 +413,27 @@ export class ClaudeAgentSdkProvider implements IProvider {
       this.sessionCache.set(taskId, sessionId);
     }
 
-    callbacks.onComplete(
-      (completedStatus as any) ?? 'completed',
-      completedReason,
-    );
+    const relTaskFolder = taskFolderName
+      ?? (outputFolder ? path.relative(CTRLNODE_ROOT, path.dirname(outputFolder)).replace(/\\/g, '/') : undefined);
+
+    if (relTaskFolder && accumulatedText.trim()) {
+      writeTaskOutputs(taskId, relTaskFolder, accumulatedText, 'claude_sdk', accumulatedText);
+      logger.info('claude_sdk_provider.outputs_written', {
+        taskId,
+        taskFolderName: relTaskFolder,
+        textLen: accumulatedText.length,
+      });
+    }
+
+    let finalStatus = (completedStatus as 'completed' | 'failed' | 'blocked' | undefined) ?? 'completed';
+    let finalReason = completedReason;
+
+    if (finalStatus === 'completed' && accumulatedText.trim()) {
+      const tag = detectStatusTag(accumulatedText);
+      finalStatus = tag.status;
+      if (tag.reason) finalReason = tag.reason;
+    }
+
+    callbacks.onComplete(finalStatus, finalReason);
   }
 }

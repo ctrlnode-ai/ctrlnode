@@ -12,11 +12,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { ctrlnodePath } from './config';
-import { ensureDir, walkDir, sanitizeRelPath } from './fileSystem';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { ctrlnodePath } from './config.js';
+import { ensureDir, walkDir, sanitizeRelPath } from './fileSystem.js';
 
 export function handleActivatePipelineTask(msg: BridgeMessage, ctx: HandlerContext): void {
   const {

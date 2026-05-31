@@ -12,8 +12,8 @@
 
 import path from 'path';
 import fs from 'fs';
-import { FileEntry, FileReadResult } from './types';
-import { MAX_INLINE_IMAGE_BYTES } from './config';
+import { FileEntry, FileReadResult } from './types.js';
+import { MAX_INLINE_IMAGE_BYTES, MAX_INLINE_PDF_BYTES } from './config.js';
 
 // ── MIME type detection ───────────────────────────────────────────────────────
 
@@ -40,6 +40,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   '.bmp':      'image/bmp',
   '.svg':      'image/svg+xml',
   '.avif':     'image/avif',
+  '.pdf':      'application/pdf',
 };
 
 /**
@@ -112,7 +113,15 @@ export function readFileForBridge(fp: string): FileReadResult {
     if (contentType.startsWith('image/')) {
       const size = fs.statSync(fp).size;
       if (size > MAX_INLINE_IMAGE_BYTES) {
-        return { contentType: 'application/octet-stream', content: null, error: `IMAGE_TOO_LARGE:${size}` };
+        return { contentType: 'application/octet-stream', content: null, error: `FILE_TOO_LARGE:${size}` };
+      }
+      return { contentType, content: fs.readFileSync(fp).toString('base64'), error: null };
+    }
+
+    if (contentType === 'application/pdf') {
+      const size = fs.statSync(fp).size;
+      if (size > MAX_INLINE_PDF_BYTES) {
+        return { contentType, content: null, error: `FILE_TOO_LARGE:${size}` };
       }
       return { contentType, content: fs.readFileSync(fp).toString('base64'), error: null };
     }
@@ -158,6 +167,63 @@ export function walkDir(dir: string, base = ''): FileEntry[] {
     }
   }
 
+  return results;
+}
+
+/**
+ * Lists only immediate child directories of `dir` (non-recursive).
+ * Used by the SaaS folder picker (`useBasePath`) so each navigation level
+ * shows one directory tier, not the full tree from `walkDir`.
+ */
+export function listDirShallow(dir: string, base = ''): FileEntry[] {
+  const results: FileEntry[] = [];
+
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (!entry.isDirectory()) continue;
+
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    results.push({ name: entry.name, path: rel, type: 'dir' });
+  }
+
+  results.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return results;
+}
+
+/**
+ * Lists immediate child files and directories (non-recursive).
+ * Used by the SaaS focus-file picker (`useBasePath` + `shallowIncludeFiles`).
+ */
+export function listDirShallowEntries(dir: string, base = ''): FileEntry[] {
+  const results: FileEntry[] = [];
+
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    const full = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      results.push({ name: entry.name, path: rel, type: 'dir' });
+    } else {
+      let size: number | null = null;
+      try { size = fs.statSync(full).size; } catch {}
+      results.push({ name: entry.name, path: rel, type: 'file', size });
+    }
+  }
+
+  results.sort((a, b) => {
+    const aDir = a.type === 'dir';
+    const bDir = b.type === 'dir';
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
   return results;
 }
 

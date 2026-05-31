@@ -1,14 +1,15 @@
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider';
-import { AgentSummary, BridgeMessage } from '../types';
-import { buildAgentSummaries, discoveredAgents, isAgentInCtrlnode, normalizeAgentId } from '../agentDiscovery';
-import { resolveTargetAgentId } from '../agentRouting';
-import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, AGENTS_CTRLNODE_ROOT } from '../config';
-import { wipeAgentSessions } from '../fileSystem';
-import { getIntentProviderMethod } from '../intentDispatchPolicy';
-import { startMainSessionPolling, stopMainSessionPolling } from '../sessionHistoryPoller';
-import { setTaskSubagentSession } from '../subagentSessions';
-import { logger } from '../logger';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { AgentSummary, BridgeMessage } from '../types.js';
+import { buildAgentSummaries, discoveredAgents, isAgentInCtrlnode, normalizeAgentId } from '../agentDiscovery.js';
+import { resolveTargetAgentId } from '../agentRouting.js';
+import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT } from '../config.js';
+import { wipeAgentSessions } from '../fileSystem.js';
+import { getIntentProviderMethod } from '../intentDispatchPolicy.js';
+import { startMainSessionPolling, stopMainSessionPolling } from '../sessionHistoryPoller.js';
+import { setTaskSubagentSession } from '../subagentSessions.js';
+import { logger } from '../logger.js';
+import { augmentPromptForRepoMode, isRepoTaskMode } from './repoDispatchContext.js';
 
 type TaskTerminalStatus = 'failed' | 'blocked';
 
@@ -21,7 +22,11 @@ export class OpenClawProvider implements IProvider {
   readonly providerName = 'openclaw';
 
   async discoverAgents(): Promise<AgentSummary[]> {
-    return buildAgentSummaries();
+    // Only return agents that belong to OpenClaw. buildAgentSummaries() returns
+    // ALL agents (including Cursor/Copilot/etc. synced via sync_*_agents). If we
+    // return those here, MultiProvider.discoverAgents() would register them under
+    // OpenClawProvider in agentOwner, causing dispatches to go to the wrong provider.
+    return buildAgentSummaries().filter(a => !a.provider || a.provider === 'openclaw');
   }
 
   async dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void> {
@@ -41,12 +46,24 @@ export class OpenClawProvider implements IProvider {
       }
     }
 
-    const sessionWorkspace = isAgentInCtrlnode(agentId) ? ctrlnodePath : agentInfo.workspace;
+    const repoMode = isRepoTaskMode(params);
+    const sessionWorkspace = repoMode
+      ? path.resolve(params.workingDir || params.repoPath!)
+      : (isAgentInCtrlnode(agentId) ? ctrlnodePath : agentInfo.workspace);
+    const message = augmentPromptForRepoMode(prompt, params);
+
+    logger.info('openclaw_provider.repo_mode', {
+      agentId,
+      taskId,
+      isRepoMode: repoMode,
+      sessionWorkspace,
+      taskLogRelativePath: params.taskLogRelativePath ?? null,
+    });
 
     await this._invokeSessionsSpawn({
       agentId,
       taskId,
-      message: prompt,
+      message,
       taskFolderName,
       sessionWorkspace,
       executionId,
@@ -94,7 +111,7 @@ export class OpenClawProvider implements IProvider {
   async invokeTool(msg: BridgeMessage, sendToSaas: (payload: any) => void): Promise<void> {
     // Delegate to the existing handleInvokeTool logic via a minimal ctx-like adapter.
     // This is imported lazily to avoid circular deps at module load time.
-    const { handleInvokeTool } = await import('../intentHandlers');
+    const { handleInvokeTool } = await import('../intentHandlers.js');
     await handleInvokeTool(msg, {
       sendToSaas,
       syncAgents: () => {},
@@ -107,7 +124,7 @@ export class OpenClawProvider implements IProvider {
   async deleteAgent(_agentId: string): Promise<boolean> { return false; }
 
   resolveFilesystemBase(agentId: string | undefined, useCtrlnode: boolean): string | null {
-    // OpenClaw always roots under its own state directory, never under AGENTS_FOLDER.
+    // OpenClaw always roots under its own state directory, never under BASE_PATH.
     if (useCtrlnode) return path.join(path.dirname(ctrlnodePath), 'ctrlnode');
     const id = normalizeAgentId(agentId ?? '');
     return discoveredAgents[id]?.workspace ?? null;

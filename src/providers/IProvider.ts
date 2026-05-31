@@ -1,4 +1,4 @@
-import { AgentSummary } from '../types';
+import { AgentSummary } from '../types.js';
 
 export interface DispatchTaskParams {
   agentId: string;
@@ -11,6 +11,10 @@ export interface DispatchTaskParams {
   skipSessionWipe?: boolean;
   predecessorAgentId?: string;
   executionId?: string;
+  taskMode?: string;
+  repoPath?: string;
+  /** CtrlNode-relative path to the task log markdown (tasks/.../output/*-output.md). */
+  taskLogRelativePath?: string;
 }
 
 export interface TaskCallbacks {
@@ -47,7 +51,7 @@ export interface IProvider {
    * Resolves the filesystem base path by provider name rather than agent ownership.
    * Used when the SaaS explicitly indicates which provider's filesystem to use.
    */
-  resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean): string | null;
+  resolveFilesystemBaseByProvider(providerName: string, useCtrlnode: boolean, agentId?: string): string | null;
   /** Base dir for create_workspace. Returns null to acknowledge without creating. */
   resolveWorkspaceCreationBase(useCtrlnode: boolean): string | null;
   /**
@@ -55,4 +59,11 @@ export interface IProvider {
    * Returns an empty array when not supported or the API call fails.
    */
   listModels?(): Promise<string[]>;
+
+  /**
+   * Optional: returns true if the underlying tool/SDK is available on this machine.
+   * Called at startup and on every heartbeat tick to report provider health to the server.
+   * Default (when not implemented): assumed available (true).
+   */
+  isAvailable?(): Promise<boolean>;
 }

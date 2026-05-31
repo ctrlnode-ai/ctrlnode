@@ -6,11 +6,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import { logger } from './logger';
-import { BridgeMessage } from './types';
-import { HandlerContext } from './handlerContext';
-import { AGENTS_CTRLNODE_ROOT, PROVIDERS } from './config';
-import { deleteDir } from './fileSystem';
+import { logger } from './logger.js';
+import { BridgeMessage } from './types.js';
+import { HandlerContext } from './handlerContext.js';
+import { CTRLNODE_ROOT } from './config.js';
+import { deleteDir } from './fileSystem.js';
 import {
   discoveredAgents,
   agentStatuses,
@@ -19,11 +19,12 @@ import {
   upsertAgentConfig,
   deleteAgentConfig,
   normalizeAgentId,
-} from './agentDiscovery';
-import { setupCodexAgentHome } from './codexAgentHome';
+} from './agentDiscovery.js';
+import { setupCodexAgentHome } from './codexAgentHome.js';
+import { ensureHermesProfile, deleteHermesProfile, writeHermesSoulMd, writeHermesProfileConfig } from './hermesProfile.js';
 
 /** Providers that support the generic sync_provider_agents flow. */
-export type SyncableProvider = 'cursor' | 'copilot' | 'codex' | 'gemini' | 'claude' | 'claude-sdk';
+export type SyncableProvider = 'cursor' | 'copilot' | 'codex' | 'gemini' | 'claude' | 'claude-sdk' | 'hermes';
 
 /**
  * Generic handler for sync_{provider}_agents messages.
@@ -38,15 +39,6 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
   const action = `sync_${provider}_agents`;
   const ackAction = `${action}_ack`;
   const { requestId, agents } = msg;
-
-  // 'claude' and 'claude-sdk' share the same implementation; accept either name.
-  const aliases: Record<string, string> = { 'claude-sdk': 'claude', 'claude': 'claude-sdk' };
-  const providerActive = PROVIDERS.includes(provider) || PROVIDERS.includes(aliases[provider] ?? '');
-  if (!providerActive) {
-    logger.debug(`${action}.skip_no_provider`, { providers: PROVIDERS });
-    ctx.sendToSaas({ action: ackAction, requestId, success: true, error: null });
-    return;
-  }
 
   if (!agents) {
     ctx.sendToSaas({ action: ackAction, requestId, success: false, error: 'MISSING_AGENTS' });
@@ -68,7 +60,7 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
       }
       const existing = discoveredAgents[normalId];
       discoveredAgents[normalId] = {
-        workspace: a.workspace || AGENTS_CTRLNODE_ROOT,
+        workspace: a.workspace || CTRLNODE_ROOT,
         name: a.name ?? normalId,
         model: a.model || provider,
         role: a.role ?? existing?.role ?? '',
@@ -86,13 +78,28 @@ export function handleSyncProviderAgents(provider: SyncableProvider, msg: Bridge
       if (provider === 'codex') {
         setupCodexAgentHome(normalId, a.description || '');
       }
+      if (provider === 'hermes') {
+        ensureHermesProfile(normalId, {
+          name: a.name,
+          role: a.role,
+          description: a.description,
+          model: a.model,
+        });
+      }
     }
 
     // Authoritative sync: remove agents for this provider no longer in the incoming list.
+    // Exception: agents discovered from the local filesystem (fromFilesystem=true) are NOT
+    // tombstoned — they were not registered in CtrlNode DB and should remain detectable.
     for (const [id, info] of Object.entries(discoveredAgents)) {
       if (info.provider === provider && !incomingIds.has(id) && !purgedAgentIds.has(id)) {
+        if (info.fromFilesystem) {
+          logger.debug(`${action}.keep_filesystem_agent`, { id });
+          continue;
+        }
         delete discoveredAgents[id];
         purgedAgentIds.add(id);
+        if (provider === 'hermes') deleteHermesProfile(id);
         logger.debug(`${action}.removed_stale`, { id });
       }
     }
@@ -140,12 +147,19 @@ export async function handleDeleteAgentFolders(msg: BridgeMessage, ctx: HandlerC
 
 export function handleDeleteAgentConfig(msg: BridgeMessage, ctx: HandlerContext): void {
   const normalId = normalizeAgentId(msg.agentId);
+  const existing = normalId ? discoveredAgents[normalId] : undefined;
+  const wasHermes = existing?.provider === 'hermes';
 
   // Remove from in-memory map so the next agent_update/heartbeat no longer reports this agent.
   let changed = false;
-  if (normalId && discoveredAgents[normalId]) {
+  if (normalId && existing) {
     delete discoveredAgents[normalId];
     changed = true;
+  }
+
+  if (wasHermes && normalId) {
+    deleteHermesProfile(normalId);
+    logger.info('delete_agent_config.hermes_home_removed', { agentId: normalId });
   }
 
   // Tombstone: prevent this agent from being re-added by the next discoverAgents() cycle.
@@ -177,6 +191,17 @@ export function handleUpdateAgentConfig(msg: BridgeMessage, ctx: HandlerContext)
     if (name !== undefined) discoveredAgents[normalId].name = name;
     if (model !== undefined) discoveredAgents[normalId].model = model;
     if (workspace !== undefined) discoveredAgents[normalId].workspace = workspace;
+    if (msg.role !== undefined) discoveredAgents[normalId].role = msg.role;
+    if (msg.description !== undefined) discoveredAgents[normalId].description = msg.description;
+    if (discoveredAgents[normalId].provider === 'hermes') {
+      writeHermesSoulMd(normalId, {
+        name: discoveredAgents[normalId].name,
+        role: discoveredAgents[normalId].role,
+        description: discoveredAgents[normalId].description,
+        model: discoveredAgents[normalId].model,
+      });
+      writeHermesProfileConfig(normalId, discoveredAgents[normalId].model);
+    }
     logger.info('update_agent_config.applied', { agentId: normalId, name, model, workspace });
   }
   ctx.syncAgents();

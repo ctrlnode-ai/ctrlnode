@@ -4,8 +4,8 @@
  * back to the SaaS via the handler context.
  */
 
-import { logger } from './logger';
-import { HandlerContext } from './handlerContext';
+import { logger } from './logger.js';
+import { HandlerContext } from './handlerContext.js';
 
 export type TaskTerminalStatus = 'failed' | 'blocked';
 

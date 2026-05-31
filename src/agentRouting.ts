@@ -1,4 +1,4 @@
-import { normalizeAgentId } from './agentDiscovery';
+import { normalizeAgentId } from './agentDiscovery.js';
 
 /** Resolves incoming agent ID to canonical lowercase. Returns undefined if not provided. */
 export function resolveTargetAgentId(agentId?: string): string | undefined {

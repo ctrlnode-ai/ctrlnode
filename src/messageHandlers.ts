@@ -3,10 +3,10 @@
  * @description Thin message router for SaaS WebSocket actions.
  */
 
-import { BridgeMessage } from './types';
-import { logger } from './logger';
-import { HandlerContext } from './handlerContext';
-import { PROVIDERS } from './config';
+import { BridgeMessage } from './types.js';
+import { logger } from './logger.js';
+import { HandlerContext } from './handlerContext.js';
+import { PROVIDERS } from './config.js';
 import {
   handleCreateWorkspace,
   handleDeleteAgentConfig,
@@ -20,13 +20,13 @@ import {
   handleWriteFile,
   handleCheckTaskOutput,
   handleActivatePipelineTask,
-} from './filesystemConfigHandlers';
-import { handleIntentAction, handleInvokeTool } from './intentHandlers';
+} from './filesystemConfigHandlers.js';
+import { handleIntentAction, handleInvokeTool } from './intentHandlers.js';
 
 /** Actions that only make sense for the OpenClaw provider */
-const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'update_agent_config', 'invoke_tool', 'init_ping']);
+const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'invoke_tool', 'init_ping']);
 
-export type { HandlerContext, SendFn } from './handlerContext';
+export type { HandlerContext, SendFn } from './handlerContext.js';
 
 export async function handleMessage(raw: { toString(): string }, ctx: HandlerContext): Promise<void> {
   let msg: BridgeMessage;
@@ -115,6 +115,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'sync_claude_sdk_agents':
       handleSyncProviderAgents('claude-sdk', msg, ctx);
+      break;
+    case 'sync_hermes_agents':
+      handleSyncProviderAgents('hermes', msg, ctx);
       break;
     default:
       break;
