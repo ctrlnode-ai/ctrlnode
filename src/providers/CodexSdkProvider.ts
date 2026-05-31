@@ -30,6 +30,22 @@ import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
 import { setAgentRunning } from '../websocket.js';
 import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils.js';
 
+/** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
+function resolveCodexFromPath(): string | undefined {
+  const cmd = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
+  if (result.status !== 0) return undefined;
+  const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (process.platform === 'win32') {
+    // Prefer .exe over .cmd — the SDK cannot spawn a .cmd wrapper directly
+    const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
+    if (exe) return exe;
+    // No .exe found — .cmd wrappers don't work, skip
+    return undefined;
+  }
+  return candidates[0] ?? undefined;
+}
+
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
 async function fetchOpenAiModels(): Promise<string[]> {
   const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
@@ -158,7 +174,8 @@ export class CodexSdkProvider implements IProvider {
     // CODEX_BIN_PATH lets operators point the SDK at a system-installed `codex`
     // binary (e.g. /usr/local/bin/codex) instead of relying on the npm optional
     // platform packages that don't exist inside the compiled Bun single-binary.
-    const codexBinPath = process.env.CODEX_BIN_PATH || undefined;
+    // If not set, fall back to resolving `codex` from the system PATH.
+    const codexBinPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
     logger.info('codex_sdk.config', {
       taskId,
       codexBinPath: codexBinPath ?? '(not set — will use findCodexPath)',

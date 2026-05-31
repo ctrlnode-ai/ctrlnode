@@ -24,12 +24,13 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 
 ---
 
-## What's new in v2.2
+## What's new in v2.2 and 2.3
 
 - **Hermes provider** — native support for Hermes agents via ACP; each agent gets its own isolated profile
 - **Binary renamed** — `ctrlnode-bridge` is now just `ctrlnode`; install scripts update PATH automatically
 - **Setup wizard** — run `ctrlnode --setup` to configure workspace and pairing token interactively; config is saved and reused on every subsequent run
 - **Model selection** — choose the exact AI model per agent (claude-sonnet-4-6, gpt-5.5, gemini-3.1-pro, …); the Bridge reports available models on connect and the UI surfaces them as a searchable drop-down
+- **Claude-opus-4-8** — is now included in the known-models fallback lists for Anthropic, Copilot, and Cursor providers. When no API key is configured the model is available immediately; with an API key it is returned directly from the live API.
 
 ---
 

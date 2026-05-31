@@ -141,6 +141,30 @@ function seedAuthJson(profileDir: string): void {
 }
 
 /**
+ * Copy .env from the global Hermes home into the profile.
+ * Skips if the profile already has .env.
+ * Allows per-profile API key overrides while inheriting the global default.
+ */
+function seedEnvFile(profileDir: string): void {
+  const src = path.join(getGlobalHermesHome(), '.env');
+  const dst = path.join(profileDir, '.env');
+  if (fs.existsSync(dst)) {
+    logger.info('hermes_profile.env_seed_skip', { reason: 'profile already has .env', dst });
+    return;
+  }
+  if (!fs.existsSync(src)) {
+    logger.info('hermes_profile.env_seed_skip', { reason: 'global .env not found', src });
+    return;
+  }
+  try {
+    fs.copyFileSync(src, dst);
+    logger.info('hermes_profile.env_seeded', { src, dst });
+  } catch (e) {
+    logger.warn('hermes_profile.env_seed_failed', { profileDir, err: String(e) });
+  }
+}
+
+/**
  * Ensure a Hermes profile directory exists for the given agent.
  * Writes SOUL.md + config.yaml and seeds auth.json (API keys) from the
  * global ~/.hermes/auth.json on first creation. Safe to call multiple times
@@ -154,6 +178,7 @@ export function ensureHermesProfile(agentId: string, profile: HermesProfileOptio
   try {
     fs.mkdirSync(profileDir, { recursive: true });
     seedAuthJson(profileDir);
+    seedEnvFile(profileDir);
     writeHermesSoulMd(agentId, profile);
     writeHermesProfileConfig(agentId, profile.model);
     logger.info('hermes_profile.ensured', { agentId, profileDir });

@@ -38,7 +38,7 @@ import {
 } from './hermesUtils.js';
 import { setupHermesAgentHome, readHermesAgentsMd } from '../hermesAgentHome.js';
 import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile.js';
-import { listHermesModels, normalizeHermesModelId } from '../hermesModelUtils.js';
+import { listHermesModels, normalizeHermesModelId, detectHermesBlockableError } from '../hermesModelUtils.js';
 
 function pushActivity(
   line: string,
@@ -239,9 +239,11 @@ export class HermesProvider implements IProvider {
         outputText += chunk.toString();
       });
 
+      let stderrAccumulated = '';
       proc.stderr.on('data', (chunk: Buffer) => {
         const text = chunk.toString().trim();
         if (!text) return;
+        stderrAccumulated += chunk.toString();
         logger.debug('hermes_provider.stderr', { agentId, text: text.slice(0, 300) });
         if (process.env.DEBUG === 'true' || process.env.DEBUG === '1') {
           for (const line of text.split('\n')) {
@@ -249,6 +251,11 @@ export class HermesProvider implements IProvider {
               activeSessionId = id;
             });
           }
+        }
+        const blockableError = detectHermesBlockableError(stderrAccumulated);
+        if (blockableError) {
+          logger.warn('hermes_provider.blockable_error', { agentId, error: blockableError });
+          finish('blocked', blockableError);
         }
       });
 

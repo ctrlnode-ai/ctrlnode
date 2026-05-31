@@ -4,7 +4,7 @@
  *   Copilot: https://docs.github.com/en/copilot/reference/ai-models/supported-models
  *   Gemini:  https://ai.google.dev/gemini-api/docs/models
  *   Cursor:  https://cursor.com/docs/models-and-pricing
- * Updated: 2026-05-19
+ * Updated: 2026-05-31
  */
 
 /** GitHub Copilot supported models (GA + public preview, non-retired). */
@@ -16,6 +16,7 @@ export const COPILOT_KNOWN_MODELS: string[] = [
   'claude-opus-4-5',
   'claude-opus-4-6',
   'claude-opus-4-7',
+  'claude-opus-4-8',
 
   // Google — Gemini
   'gemini-2.5-pro',
@@ -69,6 +70,7 @@ export const CURSOR_KNOWN_MODELS: string[] = [
   'claude-opus-4-5',
   'claude-opus-4-6',
   'claude-opus-4-7',
+  'claude-opus-4-8',
 
   // Google — Gemini
   'gemini-2.5-flash',
