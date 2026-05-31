@@ -39,8 +39,6 @@ $WorkspaceRoot = if ($workspaceAnswer.Trim()) { $workspaceAnswer.Trim() } else {
 Write-Host "  Workspace: $WorkspaceRoot" -ForegroundColor Gray
 Write-Host "  Tip: to change it later, set the BASE_PATH environment variable and restart ctrlnode." -ForegroundColor DarkGray
 
-[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
-
 # --- optional provider API keys ---
 function Save-CtrlNodeProviderKeys {
   param([string]$WorkspaceRoot)
@@ -121,6 +119,8 @@ Move-Item $tmpFile $dest -Force
 Write-Host ""
 Write-Host "OK  Installed: $dest" -ForegroundColor Green
 Write-Host "    Version:   $tag"
+
+[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
 
 # --- add to PATH if not already there ---
 $currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")

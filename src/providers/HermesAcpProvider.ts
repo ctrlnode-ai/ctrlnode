@@ -34,7 +34,9 @@ import {
 import { getHermesProfileHome, ensureHermesProfile } from '../hermesProfile.js';
 import {
   detectHermesCopilotApiFailure,
+  detectHermesBlockableError,
   hermesAcpModelSetSkipReason,
+  isHermesBlockableError,
   listHermesModels,
   normalizeHermesModelId,
   shouldSkipHermesAcpSessionModelSet,
@@ -214,7 +216,7 @@ export class HermesAcpProvider implements IProvider {
     const proc = spawn(cmd, args, {
       cwd: sessionCwd,
       env,
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
     });
 
@@ -231,6 +233,10 @@ export class HermesAcpProvider implements IProvider {
     proc.on('error', (err) => {
       logger.error('hermes_acp.proc_error', { taskId, error: err.message });
       earlyExitReject?.(err);
+    });
+    let stderrText = '';
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      stderrText += chunk.toString();
     });
     proc.on('close', (code) => {
       procExitCode = code;
@@ -442,6 +448,14 @@ export class HermesAcpProvider implements IProvider {
           callbacks.onComplete('failed', apiFailure);
           return;
         }
+        const blockableError = detectHermesBlockableError(accumulatedText)
+          ?? detectHermesBlockableError(accumulatedActivityText)
+          ?? detectHermesBlockableError(stderrText);
+        if (blockableError) {
+          logger.warn('hermes_acp.blockable_error', { taskId, error: blockableError });
+          callbacks.onComplete('blocked', blockableError);
+          return;
+        }
         const completion = detectStatusTag(accumulatedText);
         const usage = (result as { usage?: Record<string, number> }).usage;
         logger.info('hermes_acp.done', {
@@ -469,7 +483,8 @@ export class HermesAcpProvider implements IProvider {
       clearTimeout(timeout);
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('hermes_acp.error', { taskId, error: msg });
-      callbacks.onComplete('failed', msg);
+      const status = isHermesBlockableError(msg) ? 'blocked' : 'failed';
+      callbacks.onComplete(status, msg);
     } finally {
       proc.stdin.end();
       if (!proc.killed) proc.kill('SIGTERM');

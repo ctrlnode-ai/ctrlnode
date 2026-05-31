@@ -1,5 +1,7 @@
-#!/usr/bin/env sh
+﻿#!/usr/bin/env bash
 # CtrlNode Bridge — installer
+# Ignore \r so the script works when downloaded on Windows and piped into bash on WSL/Linux
+(set -o igncr) 2>/dev/null && set -o igncr || true
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
 #

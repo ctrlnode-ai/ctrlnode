@@ -142,6 +142,36 @@ export function detectHermesCopilotApiFailure(text: string): string | undefined 
   return undefined;
 }
 
+/**
+ * Detect Hermes API errors that should block the task (recoverable config problems).
+ * Returns the error message if blockable, undefined otherwise.
+ */
+export function detectHermesBlockableError(text: string): string | undefined {
+  const t = text.trim();
+  if (!t) return undefined;
+  const m = t.match(/Non-retryable client error:.*?(\w[\w\s-]+ is not a valid model(?: ID)?)/i);
+  if (m) return m[1] ?? m[0];
+  if (/is not a valid model(?: id)?/i.test(t)) {
+    const line = t.split('\n').find(l => /is not a valid model/i.test(l));
+    return line?.trim() ?? t;
+  }
+  if (/invalid api key/i.test(t)) return 'Invalid API key — check your provider credentials';
+  if (/no api key/i.test(t)) return 'No API key configured — set OPENROUTER_API_KEY';
+  return undefined;
+}
+
+/**
+ * Returns true if the error message indicates a recoverable configuration problem
+ * (invalid model ID, bad API key, etc.) that should block rather than fail the task.
+ */
+export function isHermesBlockableError(msg: string): boolean {
+  if (/is not a valid model id/i.test(msg)) return true;
+  if (/invalid api key/i.test(msg)) return true;
+  if (/no api key/i.test(msg)) return true;
+  if (/authentication/i.test(msg)) return true;
+  return false;
+}
+
 const FALLBACK_MODELS = [
   'gpt-5.4-mini',
   'gpt-5.4',
