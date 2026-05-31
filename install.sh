@@ -8,7 +8,7 @@
 
 set -e
 
-REPO="ctrlnode-ai/ctrlnode"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY_NAME="ctrlnode"
 DEFAULT_DIR="/usr/local/bin"
 INSTALL_DIR="$DEFAULT_DIR"
@@ -144,10 +144,10 @@ if [ -f "$DEST" ]; then
 fi
 
 if [ -w "$INSTALL_DIR" ]; then
-  mv "$TMP_FILE" "$DEST"
+  cp "$SRC_FILE" "$DEST"
 else
   echo "Requires sudo to install to $INSTALL_DIR..."
-  sudo mv "$TMP_FILE" "$DEST"
+  sudo cp "$SRC_FILE" "$DEST"
 fi
 
 chmod +x "$DEST"
