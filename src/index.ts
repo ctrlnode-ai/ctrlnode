@@ -24,6 +24,7 @@ const { createProviders } = await import('./providers/factory.js');
 const { MultiProvider } = await import('./providers/MultiProvider.js');
 const { runSyncAgents, connect } = await import('./websocket.js');
 const { logger } = await import('./logger.js');
+const { loadModelManifest } = await import('./modelManifest.js');
 
 // ── Keepalive ─────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,10 @@ if (keepalive.unref) keepalive.unref();
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 await ensurePairingToken();
+
+// Fetch/refresh model manifest before connecting (Option A).
+// Failures are handled internally — Bridge always starts even if the fetch fails.
+await loadModelManifest();
 
 const rawProviders = createProviders(PROVIDERS);
 const provider = rawProviders.length === 1 ? rawProviders[0] : new MultiProvider(rawProviders);

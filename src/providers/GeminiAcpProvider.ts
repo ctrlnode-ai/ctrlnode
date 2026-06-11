@@ -15,7 +15,7 @@ import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
-import { GEMINI_KNOWN_MODELS } from './knownModels.js';
+import { getKnownModels } from '../modelManifest.js';
 
 export class GeminiAcpProvider implements IProvider {
   readonly providerName = 'gemini';
@@ -85,22 +85,22 @@ export class GeminiAcpProvider implements IProvider {
     // Gemini CLI reads GEMINI_API_KEY / GOOGLE_API_KEY from env.
     // The Gemini REST API returns the full model list when a key is available.
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (!apiKey) return GEMINI_KNOWN_MODELS;
+    if (!apiKey) return getKnownModels('gemini');
     try {
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=100`,
         { signal: AbortSignal.timeout(8_000) },
       );
-      if (!resp.ok) return GEMINI_KNOWN_MODELS;
+      if (!resp.ok) return getKnownModels('gemini');
       const data = await resp.json() as any;
       const ids: string[] = ((data.models ?? []) as any[])
         .map((m: any) => (m.name as string)?.replace(/^models\//, ''))
         .filter(Boolean)
         .filter((id: string) => /^gemini/i.test(id))
         .sort();
-      return ids.length > 0 ? ids : GEMINI_KNOWN_MODELS;
+      return ids.length > 0 ? ids : getKnownModels('gemini');
     } catch {
-      return GEMINI_KNOWN_MODELS;
+      return getKnownModels('gemini');
     }
   }
 

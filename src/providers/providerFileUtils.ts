@@ -10,79 +10,24 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../logger.js';
 import { CTRLNODE_ROOT } from '../config.js';
+import { getKnownModels } from '../modelManifest.js';
 
 // ── Shared model-listing helpers ──────────────────────────────────────────────
 
-// Well-known Claude models returned when no ANTHROPIC_API_KEY is configured.
-// Keep in sync with https://docs.anthropic.com/en/docs/about-claude/models/overview
-const KNOWN_CLAUDE_MODELS = [
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5',
-  'claude-opus-4-6',
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-opus-4-1',
-];
-
-/** Fetch available model IDs from the Anthropic API. Falls back to known models when no API key is set. */
+/** Fetch available model IDs from the Anthropic API. Falls back to manifest/known models when no API key is set. */
 export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
-  if (!apiKey) return KNOWN_CLAUDE_MODELS;
+  if (!apiKey) return getKnownModels('claude');
   try {
     const resp = await fetch('https://api.anthropic.com/v1/models?limit=100', {
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       signal: AbortSignal.timeout(8_000),
     });
-    if (!resp.ok) return KNOWN_CLAUDE_MODELS;
+    if (!resp.ok) return getKnownModels('claude');
     const data = await resp.json() as any;
     const ids = ((data.data ?? []) as any[]).map((m: any) => m.id as string).filter(Boolean).sort();
-    return ids.length > 0 ? ids : KNOWN_CLAUDE_MODELS;
+    return ids.length > 0 ? ids : getKnownModels('claude');
   } catch {
-    return KNOWN_CLAUDE_MODELS;
-  }
-}
-
-/** Fetch available model IDs from the OpenAI-compatible API. Returns [] on any failure. */
-export async function fetchOpenAiCompatibleModels(
-  apiKey: string,
-  baseUrl = 'https://api.openai.com',
-  filterFn?: (id: string) => boolean,
-): Promise<string[]> {
-  if (!apiKey) return [];
-  const defaultFilter = (id: string) => /^(gpt-4|gpt-3\.5|o[1-9]|codex)/i.test(id);
-  const keep = filterFn ?? defaultFilter;
-  try {
-    const resp = await fetch(`${baseUrl}/v1/models`, {
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!resp.ok) return [];
-    const data = await resp.json() as any;
-    return ((data.data ?? []) as any[])
-      .map((m: any) => m.id as string)
-      .filter((id: string) => id && keep(id))
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-// ── Shared model-listing helpers ──────────────────────────────────────────────
-
-/** Fetch available model IDs from the Anthropic API. Returns [] on any failure. */
-export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
-  if (!apiKey) return [];
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/models?limit=100', {
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!resp.ok) return [];
-    const data = await resp.json() as any;
-    return ((data.data ?? []) as any[]).map((m: any) => m.id as string).filter(Boolean).sort();
-  } catch {
-    return [];
+    return getKnownModels('claude');
   }
 }
 

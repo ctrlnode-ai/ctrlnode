@@ -23,7 +23,7 @@ import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
-import { CURSOR_KNOWN_MODELS } from './knownModels.js';
+import { getKnownModels } from '../modelManifest.js';
 import { classifyCursorSdkTerminal, CURSOR_MISSING_API_KEY_REASON } from './providerCursorTerminal.js';
 import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded.js';
 import { SQLITE3_NATIVE_B64 } from './cursorSqlite3NativeEmbedded.js';
@@ -207,8 +207,7 @@ export class CursorSdkProvider implements IProvider {
     // Cursor uses an OpenAI-compatible API at api.cursor.sh — accept all ids
     const models = await fetchOpenAiCompatibleModels(apiKey, 'https://api.cursor.sh', () => true);
     if (models.length > 0) return models;
-    // Static fallback of known Cursor models
-    return CURSOR_KNOWN_MODELS;
+    return getKnownModels('cursor');
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────

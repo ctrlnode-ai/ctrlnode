@@ -13,7 +13,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils.js';
-import { COPILOT_KNOWN_MODELS } from './knownModels.js';
+import { getKnownModels } from '../modelManifest.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 
 export class CopilotAcpProvider implements IProvider {
@@ -81,9 +81,7 @@ export class CopilotAcpProvider implements IProvider {
   }
 
   async listModels(): Promise<string[]> {
-    // GitHub Copilot model selection via its token-exchange API is complex.
-    // Return a curated static list of models available in Copilot as of 2025-2026.
-    return COPILOT_KNOWN_MODELS;
+    return getKnownModels('copilot');
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
