@@ -13,7 +13,7 @@
  *
  * Environment:
  *   HERMES_HOME             — optional path to Hermes home dir (default: ~/.hermes)
- *   HERMES_TIMEOUT_MINUTES  — hard timeout per task (default: 15)
+ *   TASK_TIMEOUT_MINUTES  — inactivity timeout per task (default: 10)
  *   DEBUG=true              — tails agent.log at DEBUG level for richer tool traces
  *
  * Install: pip install hermes-agent  (requires Python 3.11+)
@@ -24,11 +24,11 @@ import os from 'os';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
-import { CTRLNODE_ROOT, HERMES_HOME, HERMES_TIMEOUT_MINUTES } from '../config.js';
+import { CTRLNODE_ROOT, HERMES_HOME, TASK_TIMEOUT_MINUTES } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { writeOutputFile, writeAgentLog } from './providerFileUtils.js';
+import { writeOutputFile, writeAgentLog, createInactivityTimer } from './providerFileUtils.js';
 import {
   formatHermesLogLineForActivity,
   extractHermesSessionId,
@@ -200,10 +200,12 @@ export class HermesProvider implements IProvider {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      let taskTimer: ReturnType<typeof createInactivityTimer>;
+
       const finish = (status: 'completed' | 'failed' | 'blocked', reason?: string) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeoutHandle);
+        taskTimer.clear();
         logProc.kill();
         if (logBuffer.trim()) {
           activeSessionId = pushActivity(logBuffer, activeSessionId, emitActivity, (id) => {
@@ -229,13 +231,14 @@ export class HermesProvider implements IProvider {
         resolve();
       };
 
-      const timeoutHandle = setTimeout(() => {
+      taskTimer = createInactivityTimer(TASK_TIMEOUT_MINUTES * 60_000, () => {
         proc.kill();
-        finish('blocked', `Task timed out after ${HERMES_TIMEOUT_MINUTES} minutes`);
-      }, HERMES_TIMEOUT_MINUTES * 60_000);
+        finish('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
+      });
 
       // Final answer only — do not mirror stdout into Agent Activity (avoids glued log+text blobs).
       proc.stdout.on('data', (chunk: Buffer) => {
+        taskTimer.reset();
         outputText += chunk.toString();
       });
 

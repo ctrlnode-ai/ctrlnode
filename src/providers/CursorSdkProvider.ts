@@ -15,14 +15,14 @@ import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
-  CURSOR_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { detectStatusTag, writeTaskOutputs, createInactivityTimer } from './providerFileUtils.js';
 import { getKnownModels } from '../modelManifest.js';
 import { classifyCursorSdkTerminal, CURSOR_MISSING_API_KEY_REASON } from './providerCursorTerminal.js';
 import { CURSOR_SDK_RUNNER_SOURCE } from './cursorSdkRunnerEmbedded.js';
@@ -229,7 +229,7 @@ export class CursorSdkProvider implements IProvider {
 
     const effectiveCwd = spawnCwd ?? CTRLNODE_ROOT;
     fs.mkdirSync(effectiveCwd, { recursive: true });
-    const timeoutMs = CURSOR_TIMEOUT_MINUTES * 60_000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60_000;
 
     const mcpRoot = path.resolve(effectiveCwd);
 
@@ -277,12 +277,10 @@ export class CursorSdkProvider implements IProvider {
       earlyExitReject?.(new Error(`cursor-sdk-runner exited with code ${code}${stderrHint}`));
     });
 
-    let timedOut = false;
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
+    const timer = createInactivityTimer(timeoutMs, () => {
       proc.kill('SIGTERM');
-      logger.warn('cursor_sdk.timeout', { taskId, timeoutMinutes: CURSOR_TIMEOUT_MINUTES });
-    }, timeoutMs);
+      logger.warn('cursor_sdk.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
     let accumulatedText = '';
     const writtenFiles: string[] = [];
@@ -318,6 +316,7 @@ export class CursorSdkProvider implements IProvider {
       const rl = createInterface({ input: proc.stdout!, terminal: false });
 
       for await (const line of rl) {
+        timer.reset();
         if (!line.trim()) continue;
         let msg: any;
         try { msg = JSON.parse(line); } catch { continue; }
@@ -367,12 +366,12 @@ export class CursorSdkProvider implements IProvider {
     try {
       await Promise.race([runnerWork(), earlyExitPromise]);
       earlyExitReject = null;
-      clearTimeout(timeoutHandle);
+      timer.clear();
 
       // task_error inside runnerWork already called onComplete — don't call again.
       if (completedByRunner) return;
 
-      if (timedOut) {
+      if (timer.fired) {
         callbacks.onComplete('blocked', 'Task timed out');
         return;
       }
@@ -395,7 +394,7 @@ export class CursorSdkProvider implements IProvider {
       callbacks.onComplete(completion.status, completion.reason);
 
     } catch (err) {
-      clearTimeout(timeoutHandle);
+      timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('cursor_sdk.error', { taskId, error: msg, exitCode: procExitCode });
       const terminal = classifyCursorSdkTerminal(msg, { hasApiKey: !!apiKey.trim() });

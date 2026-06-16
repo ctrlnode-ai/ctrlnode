@@ -110,6 +110,50 @@ export function writeAgentLog(
   }
 }
 
+// ── ACP filesystem sandbox ────────────────────────────────────────────────────
+
+/**
+ * Resolves `filePath` relative to `sandboxRoot` and returns the absolute path
+ * only if it stays inside the sandbox. Returns null for any path that escapes.
+ */
+export function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
+  const resolved = path.isAbsolute(filePath)
+    ? path.normalize(filePath)
+    : path.resolve(sandboxRoot, filePath);
+  const normalRoot = path.resolve(sandboxRoot);
+  return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot
+    ? resolved
+    : null;
+}
+
+// ── Inactivity timer ─────────────────────────────────────────────────────────
+
+/**
+ * Creates a self-resetting inactivity timer shared by all provider implementations.
+ *
+ * The timer fires `onTimeout` if no call to `reset()` arrives within `timeoutMs`.
+ * Call `reset()` on every received message/event so an actively working agent is
+ * never killed by a fixed wall-clock timeout. Call `clear()` when the task
+ * finishes to cancel any pending fire.
+ */
+export function createInactivityTimer(
+  timeoutMs: number,
+  onTimeout: () => void,
+): { reset(): void; clear(): void; readonly fired: boolean } {
+  let handle: ReturnType<typeof setTimeout>;
+  let _fired = false;
+  const reset = () => {
+    clearTimeout(handle);
+    handle = setTimeout(() => { _fired = true; onTimeout(); }, timeoutMs);
+  };
+  reset();
+  return {
+    reset,
+    clear: () => clearTimeout(handle),
+    get fired() { return _fired; },
+  };
+}
+
 // ── Combined "done" helper ────────────────────────────────────────────────────
 
 /**

@@ -20,7 +20,7 @@ export type { SyncableProvider } from './agentRegistrationHandlers.js';
 export { handleActivatePipelineTask } from './pipelineTaskHandler.js';
 
 /** Files written only for scaffold/tooling purposes — should not trigger task completion. */
-const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep']);
+const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep', 'agent_log.md']);
 
 /**
  * Debounce task_complete signals by 45s per task folder.
@@ -123,9 +123,9 @@ export function handleWriteFile(msg: BridgeMessage, ctx: HandlerContext): void {
     const normalizedPath = safePath.replace(/\\/g, '/');
     const outputFileMatch = normalizedPath.match(/^(tasks\/[^/]+)\/output\/(.+)$/);
     if (outputFileMatch) {
-      const taskFolderName = outputFileMatch[1];
-      const filename = path.basename(outputFileMatch[2]);
-      if (!SCAFFOLD_ONLY_FILES.has(filename)) {
+      const taskFolderName = outputFileMatch[1]!;
+      const filename = path.basename(outputFileMatch[2]!);
+      if (!SCAFFOLD_ONLY_FILES.has(filename) && targetId) {
         logger.debug('subagent.output_file_written', { agentId: targetId, taskFolderName, path: safePath });
         scheduleTaskComplete(taskFolderName, targetId, ctx);
       }

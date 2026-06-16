@@ -14,7 +14,7 @@ import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
-  CODEX_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config.js';
@@ -28,7 +28,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery.js';
 import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
 import { setAgentRunning } from '../websocket.js';
-import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels } from './providerFileUtils.js';
+import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels, createInactivityTimer } from './providerFileUtils.js';
 
 /** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
 function resolveCodexFromPath(): string | undefined {
@@ -146,7 +146,7 @@ export class CodexSdkProvider implements IProvider {
     };
     const { spawnCwd, extraDirectories } = ctx;
     fs.mkdirSync(spawnCwd, { recursive: true });
-    const timeoutMs = CODEX_TIMEOUT_MINUTES * 60_000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60_000;
 
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
@@ -237,11 +237,9 @@ export class CodexSdkProvider implements IProvider {
       return;
     }
 
-    let timedOut = false;
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      logger.warn('codex_sdk.timeout', { taskId, timeoutMinutes: CODEX_TIMEOUT_MINUTES });
-    }, timeoutMs);
+    const timer = createInactivityTimer(timeoutMs, () => {
+      logger.warn('codex_sdk.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
     let accumulatedText = '';
     const writtenFiles: string[] = [];
@@ -271,7 +269,8 @@ export class CodexSdkProvider implements IProvider {
 
       let eventCount = 0;
       for await (const event of events) {
-        if (timedOut) break;
+        timer.reset();
+        if (timer.fired) break;
 
         // Stream text deltas (SDK internal event not in the public type union)
         const rawEvent = event as any;
@@ -358,7 +357,7 @@ export class CodexSdkProvider implements IProvider {
           // Strip "Reconnecting... X/Y " prefix emitted by the codex CLI retry logic
           const errMsg = rawMsg.replace(/^Reconnecting\.\.\.\s*\d+\/\d+\s*/i, '').trim() || rawMsg;
           logger.error('codex_sdk.error_event', { taskId, error: errMsg });
-          clearTimeout(timeoutHandle);
+          timer.clear();
           callbacks.onComplete('failed', errMsg);
           return;
         }
@@ -367,16 +366,16 @@ export class CodexSdkProvider implements IProvider {
         if (rawEvent.type === 'turn.failed') {
           const errMsg = rawEvent.error?.message ?? 'Codex turn failed';
           logger.error('codex_sdk.turn_failed', { taskId, error: errMsg });
-          clearTimeout(timeoutHandle);
+          timer.clear();
           callbacks.onComplete('failed', errMsg);
           return;
         }
       }
 
       logger.info('codex_sdk.events_stream_closed', { taskId, totalEvents: eventCount });
-      clearTimeout(timeoutHandle);
+      timer.clear();
 
-      if (timedOut) {
+      if (timer.fired) {
         callbacks.onComplete('blocked', 'Task timed out');
         return;
       }
@@ -389,7 +388,7 @@ export class CodexSdkProvider implements IProvider {
       callbacks.onComplete(completion.status, completion.reason);
 
     } catch (err) {
-      clearTimeout(timeoutHandle);
+      timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       logger.error('codex_sdk.error', { taskId, error: msg, stack });

@@ -26,6 +26,7 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 
 ## What's new in v2.4
 
+- **Auto-update** — Bridge checks for a newer version on startup, shows a prompt with the release link, and replaces itself with one keypress. Skipped automatically when running non-interactively.
 - **Live model updates** — model lists are now fetched from the server on startup and refreshed after every connection. New models (including **Claude Fable 5** and **Claude Mythos 5**) become available without reinstalling the Bridge.
 - **Fix: task completion debounce** — agents that write multiple output files in sequence no longer trigger a premature done signal; Bridge waits 45 s after the last file write before closing the task.
 

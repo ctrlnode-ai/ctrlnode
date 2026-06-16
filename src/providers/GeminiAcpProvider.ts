@@ -1,20 +1,20 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
-import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
-  GEMINI_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection } from './acpCommon.js';
+import { detectStatusTag, writeTaskOutputs, createInactivityTimer, resolveSecurePath } from './providerFileUtils.js';
 import { getKnownModels } from '../modelManifest.js';
 
 export class GeminiAcpProvider implements IProvider {
@@ -117,7 +117,7 @@ export class GeminiAcpProvider implements IProvider {
   ): Promise<void> {
     const providerTasksRoot = geminiMdRoot ?? resolveProjectHome(taskFolderName);
     fs.mkdirSync(providerTasksRoot, { recursive: true });
-    const timeoutMs = GEMINI_TIMEOUT_MINUTES * 60_000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60_000;
 
     // Per-agent model: use the model registered in the UI if explicitly set.
     // Only pass --model if configured (Gemini ACP may reject unknown flags).
@@ -142,11 +142,9 @@ export class GeminiAcpProvider implements IProvider {
       catch (e) { logger.warn('gemini_acp.gemini_md_write_failed', { taskId, err: String(e) }); return false; }
     })() : false;
 
-    const isWindows = process.platform === 'win32';
     const acpArgs = ['--acp', '--approval-mode', 'yolo'];
     if (effectiveModel) acpArgs.push('--model', effectiveModel);
-    const cmd  = isWindows ? 'cmd.exe' : 'gemini';
-    const args = isWindows ? ['/c', 'gemini', ...acpArgs] : acpArgs;
+    const { cmd, args } = buildAcpSpawnCommand('gemini', acpArgs);
 
     // Ensure the task folder is in Gemini's trusted directories so that
     // --approval-mode yolo is honoured and project agents are loaded.
@@ -167,31 +165,14 @@ export class GeminiAcpProvider implements IProvider {
       return;
     }
 
-    // Detect early process exit — if gemini dies before completing, reject
-    // immediately instead of hanging the connection forever.
-    let procExitCode: number | null = null;
-    let earlyExitReject: ((err: Error) => void) | null = null;
-    const earlyExitPromise = new Promise<never>((_res, rej) => { earlyExitReject = rej; });
-    proc.on('error', (err) => {
-      logger.error('gemini_acp.proc_error', { taskId, error: err.message });
-      earlyExitReject?.(err);
-    });
-    proc.on('close', (code) => {
-      procExitCode = code;
-      logger.debug('gemini_acp.proc_close', { taskId, code });
-      earlyExitReject?.(new Error(`gemini process exited with code ${code}`));
-    });
+    const earlyExit = createProcEarlyExit(proc, 'gemini_acp', taskId);
 
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
+    const timer = createInactivityTimer(timeoutMs, () => {
       proc.kill('SIGTERM');
-      logger.warn('gemini_acp.timeout', { taskId, timeoutMinutes: GEMINI_TIMEOUT_MINUTES });
-    }, timeoutMs);
+      logger.warn('gemini_acp.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
-    const output = Writable.toWeb(proc.stdin)  as unknown as WritableStream<Uint8Array>;
-    const input  = Readable.toWeb(proc.stdout) as unknown as ReadableStream<Uint8Array>;
-    const stream = acp.ndJsonStream(output, input);
+    const stream = createAcpStream(proc);
 
     let accumulatedText = '';
     const writtenFiles: string[] = [];
@@ -220,6 +201,7 @@ export class GeminiAcpProvider implements IProvider {
       },
 
       async sessionUpdate(params) {
+        timer.reset();
         const update = (params as any).update;
         const mapped = mapAcpUpdate(taskId, update);
         if (mapped) {
@@ -269,17 +251,8 @@ export class GeminiAcpProvider implements IProvider {
     };
 
     try {
-      const connection = new acp.ClientSideConnection((_agent) => client, stream);
-
-      // Race all ACP operations against early process exit so we fail fast
-      // instead of hanging indefinitely if gemini exits unexpectedly.
       const acpWork = async () => {
-        await connection.initialize({
-          protocolVersion: acp.PROTOCOL_VERSION,
-          clientCapabilities: {
-            fs: { readTextFile: true, writeTextFile: true },
-          },
-        });
+        const connection = await initAcpConnection(stream, client);
 
         const session = await connection.newSession({
           cwd: spawnCwd,
@@ -316,16 +289,14 @@ export class GeminiAcpProvider implements IProvider {
         return { promptResult, sessionModelId };
       };
 
-      const acpResult = await Promise.race([acpWork(), earlyExitPromise]);
+      const acpResult = await Promise.race([acpWork(), earlyExit.promise]);
       const result = (acpResult as any).promptResult ?? acpResult;
       const sessionModelId: string | undefined = (acpResult as any).sessionModelId;
-      // Once ACP work is done, nullify the early-exit reject so the close event
-      // that fires during cleanup doesn't surface as an error.
-      earlyExitReject = null;
+      earlyExit.clearReject();
 
-      clearTimeout(timeout);
+      timer.clear();
 
-      if (timedOut) {
+      if (timer.fired) {
         callbacks.onComplete('blocked', 'Task timed out');
       } else if ((result as any).stopReason === 'end_turn') {
         writeTaskOutputs(taskId, taskFolderName ?? '', accumulatedText, 'gemini_acp');
@@ -354,7 +325,7 @@ export class GeminiAcpProvider implements IProvider {
         callbacks.onComplete('failed', reason);
       }
     } catch (err) {
-      clearTimeout(timeout);
+      timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('gemini_acp.error', { taskId, error: msg });
       callbacks.onComplete('failed', msg);
@@ -467,14 +438,3 @@ function trustGeminiDirectory(dir: string, taskId: string): void {
   }
 }
 
-// ── Security: sandbox path resolution ────────────────────────────────────────
-
-function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
-  const resolved = path.isAbsolute(filePath)
-    ? path.normalize(filePath)
-    : path.resolve(sandboxRoot, filePath);
-  const normalRoot = path.resolve(sandboxRoot);
-  return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot
-    ? resolved
-    : null;
-}

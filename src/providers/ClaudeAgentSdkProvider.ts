@@ -11,7 +11,7 @@
  *   ANTHROPIC_API_KEY   — required; passed to the SDK process env
  *   CLAUDE_SDK_TOOLS    — comma-separated allowed tools (default: Read,Write,Edit,Bash,Glob,Grep)
  *   CLAUDE_SDK_MAX_TURNS — max agentic turns (default: 20)
- *   CLAUDE_SDK_TIMEOUT_MINUTES — hard timeout in minutes (default: 10)
+ *   TASK_TIMEOUT_MINUTES — hard timeout in minutes (default: 10)
  *   CLAUDE_SDK_PERMISSION_MODE — bypassPermissions | acceptEdits | dontAsk (default: bypassPermissions)
  *   CLAUDE_SDK_MODEL    — model alias/id override (default: inherited from SDK)
  */
@@ -27,13 +27,13 @@ import {
   ANTHROPIC_API_KEY,
   CLAUDE_SDK_TOOLS,
   CLAUDE_SDK_MAX_TURNS,
-  CLAUDE_SDK_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
   CLAUDE_SDK_PERMISSION_MODE,
   CLAUDE_SDK_EXECUTABLE,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs } from './providerFileUtils.js';
+import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs, createInactivityTimer } from './providerFileUtils.js';
 import {
   appendTaskLogToSystemParts,
   resolveRepoDispatchSpawn,
@@ -65,6 +65,46 @@ function splitPromptInstructions(prompt: string): { taskBody: string; instructio
     taskBody: prompt.slice(0, idx).trim(),
     instructionsBlock: ('## INSTRUCTIONS\n' + prompt.slice(idx + marker.length)).trim(),
   };
+}
+
+// How long the output folder must be unchanged before we consider the process done.
+const STABLE_WINDOW_MS  = 15_000;   // 15 s of no size change → stable
+const POLL_INTERVAL_MS  = 3_000;    // check every 3 s
+const MAX_WAIT_MS       = 20 * 60 * 1000; // give up after 20 min
+
+/**
+ * Polls `outputFolder` until its total byte size has been unchanged for
+ * STABLE_WINDOW_MS. This lets the underlying claude process finish writing
+ * files after the SDK emits result:success, preventing a premature DONE.
+ */
+async function waitForOutputStable(taskId: string, outputFolder: string): Promise<void> {
+  const deadline = Date.now() + MAX_WAIT_MS;
+  let lastSize = -1;
+  let stableSince = 0;
+
+  while (Date.now() < deadline) {
+    let totalSize = 0;
+    try {
+      const entries = fs.readdirSync(outputFolder);
+      for (const entry of entries) {
+        try {
+          totalSize += fs.statSync(path.join(outputFolder, entry)).size;
+        } catch { /* ignore */ }
+      }
+    } catch { /* folder may not exist yet */ }
+
+    if (totalSize !== lastSize) {
+      lastSize = totalSize;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= STABLE_WINDOW_MS) {
+      logger.info('claude_sdk_provider.output_stable', { taskId, totalSize });
+      return;
+    }
+
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+  }
+
+  logger.warn('claude_sdk_provider.output_stable_timeout', { taskId });
 }
 
 export class ClaudeAgentSdkProvider implements IProvider {
@@ -276,14 +316,14 @@ export class ClaudeAgentSdkProvider implements IProvider {
       ...(CLAUDE_SDK_EXECUTABLE ? { pathToClaudeCodeExecutable: CLAUDE_SDK_EXECUTABLE } : {}),
     };
 
-    const timeoutMs = CLAUDE_SDK_TIMEOUT_MINUTES * 60 * 1000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60 * 1000;
     const abortController = new AbortController();
     options.abortController = abortController;
 
-    const timeoutHandle = setTimeout(() => {
+    const timer = createInactivityTimer(timeoutMs, () => {
       abortController.abort();
-      logger.warn('claude_sdk_provider.timeout', { taskId, timeoutMinutes: CLAUDE_SDK_TIMEOUT_MINUTES });
-    }, timeoutMs);
+      logger.warn('claude_sdk_provider.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
     logger.info('claude_sdk_provider.query_start', {
       taskId,
@@ -309,6 +349,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     try {
       for await (const message of query({ prompt, options })) {
+        timer.reset(); // any SDK message = agent is alive
         const msgType = (message as any).type;
 
         // Forward raw event to SaaS stream
@@ -397,9 +438,11 @@ export class ClaudeAgentSdkProvider implements IProvider {
         }
       }
     } catch (err: any) {
-      clearTimeout(timeoutHandle);
-      if (err?.name === 'AbortError') {
-        callbacks.onComplete('blocked', `Task timed out after ${CLAUDE_SDK_TIMEOUT_MINUTES} minutes`);
+      timer.clear();
+      const isAbort = err?.name === 'AbortError'
+        || (err?.message ?? '').toLowerCase().includes('aborted');
+      if (isAbort) {
+        callbacks.onComplete('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
       } else {
         logger.error('claude_sdk_provider.query_error', { taskId, error: err?.message });
         callbacks.onComplete('failed', err?.message ?? 'Unknown error');
@@ -407,7 +450,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
       return;
     }
 
-    clearTimeout(timeoutHandle);
+    timer.clear();
 
     if (sessionId && taskId) {
       this.sessionCache.set(taskId, sessionId);
@@ -415,6 +458,14 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     const relTaskFolder = taskFolderName
       ?? (outputFolder ? path.relative(CTRLNODE_ROOT, path.dirname(outputFolder)).replace(/\\/g, '/') : undefined);
+
+    // Wait for the underlying claude process to finish writing output files.
+    // The SDK emits result:success when the conversation turn ends, but the process
+    // can keep writing files for minutes after that. We poll the outputFolder until
+    // its total size has been stable for STABLE_WINDOW_MS (no writes in progress).
+    if (outputFolder && completedStatus === 'completed') {
+      await waitForOutputStable(taskId, outputFolder);
+    }
 
     if (relTaskFolder && accumulatedText.trim()) {
       writeTaskOutputs(taskId, relTaskFolder, accumulatedText, 'claude_sdk', accumulatedText);

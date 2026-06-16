@@ -3,10 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
-import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_TIMEOUT_MINUTES, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome } from '../config.js';
+import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { createInactivityTimer } from './providerFileUtils.js';
 
 
 /**
@@ -264,13 +265,11 @@ export class ClaudeCodeProvider implements IProvider {
       proc.stdin.end();
     }
 
-    const timeoutMs = CLAUDE_TIMEOUT_MINUTES * 60 * 1000;
-    let timedOut = false;
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60 * 1000;
+    const timer = createInactivityTimer(timeoutMs, () => {
       proc.kill('SIGTERM');
-      logger.warn('claude_provider.timeout', { taskId, timeoutMinutes: CLAUDE_TIMEOUT_MINUTES });
-    }, timeoutMs);
+      logger.warn('claude_provider.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
     let sessionId: string | undefined;
     let stderrBuf = '';
@@ -293,6 +292,7 @@ export class ClaudeCodeProvider implements IProvider {
     let lineBuf = '';
     let firstChunk = true;
     proc.stdout?.on('data', (chunk: Buffer) => {
+      timer.reset();
       if (firstChunk) {
         firstChunk = false;
         logger.info('claude_provider.stdout_first_chunk', { taskId, bytes: chunk.length, preview: chunk.toString().slice(0, 200) });
@@ -383,14 +383,14 @@ export class ClaudeCodeProvider implements IProvider {
 
     await new Promise<void>((resolve) => {
       proc.on('close', (code) => {
-        clearTimeout(timeoutHandle);
+        timer.clear();
 
         if (sessionId && taskId) {
           this.sessionCache.set(taskId, sessionId);
         }
 
-        if (timedOut) {
-          callbacks.onComplete('blocked', `Task timed out after ${CLAUDE_TIMEOUT_MINUTES} minutes`);
+        if (timer.fired) {
+          callbacks.onComplete('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
         } else if (code === 0) {
           callbacks.onComplete('completed');
         } else {
@@ -403,7 +403,7 @@ export class ClaudeCodeProvider implements IProvider {
       });
 
       proc.on('error', (err) => {
-        clearTimeout(timeoutHandle);
+        timer.clear();
         logger.error('claude_provider.spawn_error', { taskId, error: err.message });
         callbacks.onComplete('failed', err.message);
         resolve();

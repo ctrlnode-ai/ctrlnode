@@ -7,7 +7,11 @@
 declare const BUILD_TIME: string;
 const _buildTime = typeof BUILD_TIME !== 'undefined' ? BUILD_TIME : 'dev';
 
-console.log(`\nCTRLNODE Bridge v2026.2.2  built ${_buildTime}\n`);
+// config.ts MUST be the first import — it validates env vars and exits
+// with a user-friendly message if required files are missing.
+const { PROVIDERS, ensurePairingToken, BRIDGE_VERSION } = await import('./config.js');
+
+console.log(`\nCTRLNODE Bridge ${BRIDGE_VERSION}  built ${_buildTime}\n`);
 
 // --setup: run interactive wizard and exit before loading anything else.
 // Must be checked before any other imports so config.ts side-effects don't run.
@@ -17,14 +21,12 @@ if (process.argv.includes('--setup')) {
   process.exit(0);
 }
 
-// config.ts MUST be the first import — it validates env vars and exits
-// with a user-friendly message if required files are missing.
-const { PROVIDERS, ensurePairingToken } = await import('./config.js');
 const { createProviders } = await import('./providers/factory.js');
 const { MultiProvider } = await import('./providers/MultiProvider.js');
 const { runSyncAgents, connect } = await import('./websocket.js');
 const { logger } = await import('./logger.js');
 const { loadModelManifest } = await import('./modelManifest.js');
+const { checkAndApplyUpdate } = await import('./updater.js');
 
 // ── Keepalive ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +34,10 @@ const keepalive = setInterval(() => {}, 1_000);
 if (keepalive.unref) keepalive.unref();
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+// Check for Bridge updates — runs before pairing/connect so prompt appears right after banner.
+// Failures are handled internally — Bridge always starts even if the check fails.
+await checkAndApplyUpdate();
 
 await ensurePairingToken();
 
