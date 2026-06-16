@@ -20,7 +20,34 @@ export type { SyncableProvider } from './agentRegistrationHandlers.js';
 export { handleActivatePipelineTask } from './pipelineTaskHandler.js';
 
 /** Files written only for scaffold/tooling purposes — should not trigger task completion. */
-const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep']);
+const SCAFFOLD_ONLY_FILES = new Set(['.gitkeep', '.DS_Store', 'Thumbs.db', '.keep', 'agent_log.md']);
+
+/**
+ * Debounce task_complete signals by 45s per task folder.
+ * Agents often write intermediate output files before truly finishing —
+ * we wait for a quiet window before declaring the task done.
+ */
+const TASK_COMPLETE_DEBOUNCE_MS = 45_000;
+const taskCompleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleTaskComplete(taskFolderName: string, agentId: string, ctx: HandlerContext): void {
+  const existing = taskCompleteTimers.get(taskFolderName);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    taskCompleteTimers.delete(taskFolderName);
+    ctx.sendToSaas({ action: 'task_complete', agentId, taskFolderName, source: 'output_file' });
+  }, TASK_COMPLETE_DEBOUNCE_MS);
+  taskCompleteTimers.set(taskFolderName, timer);
+}
+
+/** Cancel any pending output-file task_complete debounce for this task folder (called when an explicit terminal signal arrives). */
+export function cancelTaskCompleteDebounce(taskFolderName: string): void {
+  const existing = taskCompleteTimers.get(taskFolderName);
+  if (existing) {
+    clearTimeout(existing);
+    taskCompleteTimers.delete(taskFolderName);
+  }
+}
 
 /**
  * Resolves the filesystem base path for a Bridge message.
@@ -96,11 +123,11 @@ export function handleWriteFile(msg: BridgeMessage, ctx: HandlerContext): void {
     const normalizedPath = safePath.replace(/\\/g, '/');
     const outputFileMatch = normalizedPath.match(/^(tasks\/[^/]+)\/output\/(.+)$/);
     if (outputFileMatch) {
-      const taskFolderName = outputFileMatch[1];
-      const filename = path.basename(outputFileMatch[2]);
-      if (!SCAFFOLD_ONLY_FILES.has(filename)) {
+      const taskFolderName = outputFileMatch[1]!;
+      const filename = path.basename(outputFileMatch[2]!);
+      if (!SCAFFOLD_ONLY_FILES.has(filename) && targetId) {
         logger.debug('subagent.output_file_written', { agentId: targetId, taskFolderName, path: safePath });
-        ctx.sendToSaas({ action: 'task_complete', agentId: targetId, taskFolderName, source: 'output_file' });
+        scheduleTaskComplete(taskFolderName, targetId, ctx);
       }
     }
   }
@@ -299,6 +326,13 @@ export function handleCheckTaskOutput(msg: BridgeMessage, ctx: HandlerContext): 
   if (fs.existsSync(outputDir)) {
     const files = fs.readdirSync(outputDir).filter(f => !SCAFFOLD_ONLY_FILES.has(f));
     hasOutput = files.length > 0;
+  }
+
+  // If a debounce timer is still running for this folder, the agent is still writing —
+  // report hasOutput=false so the backend doesn't mark the task done prematurely.
+  if (hasOutput && taskCompleteTimers.has(taskFolderName)) {
+    logger.debug('check_task_output.debounce_pending', { agentId: targetId, taskFolderName });
+    hasOutput = false;
   }
 
   logger.debug('check_task_output', { agentId: targetId, taskFolderName, outputDir, hasOutput });

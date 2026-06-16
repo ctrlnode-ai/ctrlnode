@@ -1,20 +1,20 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
-import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
-  COPILOT_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
   CTRLNODE_ROOT,
   resolveProjectHome,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { detectStatusTag, writeOutputFile, writeAgentLog } from './providerFileUtils.js';
-import { COPILOT_KNOWN_MODELS } from './knownModels.js';
+import { detectStatusTag, writeOutputFile, writeAgentLog, createInactivityTimer, resolveSecurePath } from './providerFileUtils.js';
+import { getKnownModels } from '../modelManifest.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { buildAcpSpawnCommand, createAcpStream, initAcpConnection } from './acpCommon.js';
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';
@@ -81,9 +81,7 @@ export class CopilotAcpProvider implements IProvider {
   }
 
   async listModels(): Promise<string[]> {
-    // GitHub Copilot model selection via its token-exchange API is complex.
-    // Return a curated static list of models available in Copilot as of 2025-2026.
-    return COPILOT_KNOWN_MODELS;
+    return getKnownModels('copilot');
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -104,11 +102,9 @@ export class CopilotAcpProvider implements IProvider {
       : providerTasksRoot;
     const taskOutputFolder = path.join(taskFolder, 'output');
     fs.mkdirSync(taskOutputFolder, { recursive: true });
-    const timeoutMs = COPILOT_TIMEOUT_MINUTES * 60_000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60_000;
 
-    const isWindows = process.platform === 'win32';
-    const cmd  = isWindows ? 'cmd.exe' : 'copilot';
-    const args = isWindows ? ['/c', 'copilot', '--acp', '--stdio'] : ['--acp', '--stdio'];
+    const { cmd, args } = buildAcpSpawnCommand('copilot', ['--acp', '--stdio']);
 
     logger.info('copilot_acp.spawn', { taskId, cwd });
 
@@ -124,16 +120,12 @@ export class CopilotAcpProvider implements IProvider {
       return;
     }
 
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
+    const timer = createInactivityTimer(timeoutMs, () => {
       proc.kill('SIGTERM');
-      logger.warn('copilot_acp.timeout', { taskId, timeoutMinutes: COPILOT_TIMEOUT_MINUTES });
-    }, timeoutMs);
+      logger.warn('copilot_acp.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
+    });
 
-    const output = Writable.toWeb(proc.stdin)  as unknown as WritableStream<Uint8Array>;
-    const input  = Readable.toWeb(proc.stdout) as unknown as ReadableStream<Uint8Array>;
-    const stream = acp.ndJsonStream(output, input);
+    const stream = createAcpStream(proc);
 
     let accumulatedText = '';
     const writtenFiles: string[] = [];
@@ -161,6 +153,7 @@ export class CopilotAcpProvider implements IProvider {
       },
 
       async sessionUpdate(params) {
+        timer.reset();
         const update = (params as any).update;
         const mapped = mapAcpUpdate(taskId, update);
         if (mapped) {
@@ -215,14 +208,7 @@ export class CopilotAcpProvider implements IProvider {
     };
 
     try {
-      const connection = new acp.ClientSideConnection((_agent) => client, stream);
-
-      await connection.initialize({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-        },
-      });
+      const connection = await initAcpConnection(stream, client);
 
       const session = await connection.newSession({
         cwd,
@@ -246,9 +232,9 @@ export class CopilotAcpProvider implements IProvider {
         prompt: [{ type: 'text', text: wrappedPrompt }],
       });
 
-      clearTimeout(timeout);
+      timer.clear();
 
-      if (timedOut) {
+      if (timer.fired) {
         callbacks.onComplete('blocked', 'Task timed out');
       } else if ((result as any).stopReason === 'end_turn') {
         // If neither the ACP writeTextFile handler nor the MCP server-filesystem
@@ -277,7 +263,7 @@ export class CopilotAcpProvider implements IProvider {
         callbacks.onComplete('failed', reason);
       }
     } catch (err) {
-      clearTimeout(timeout);
+      timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('copilot_acp.error', { taskId, error: msg });
       callbacks.onComplete('failed', msg);
@@ -336,12 +322,3 @@ ${userPrompt}`;
  * Resolves `filePath` and ensures it stays within `sandboxRoot`.
  * Returns the resolved absolute path, or null if it would escape the sandbox.
  */
-function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
-  const resolved = path.isAbsolute(filePath)
-    ? path.normalize(filePath)
-    : path.resolve(sandboxRoot, filePath);
-  const normalRoot = path.resolve(sandboxRoot);
-  return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot
-    ? resolved
-    : null;
-}

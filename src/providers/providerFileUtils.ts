@@ -10,36 +10,24 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../logger.js';
 import { CTRLNODE_ROOT } from '../config.js';
+import { getKnownModels } from '../modelManifest.js';
 
 // ── Shared model-listing helpers ──────────────────────────────────────────────
 
-// Well-known Claude models returned when no ANTHROPIC_API_KEY is configured.
-// Keep in sync with https://docs.anthropic.com/en/docs/about-claude/models/overview
-const KNOWN_CLAUDE_MODELS = [
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5',
-  'claude-opus-4-6',
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-opus-4-1',
-];
-
-/** Fetch available model IDs from the Anthropic API. Falls back to known models when no API key is set. */
+/** Fetch available model IDs from the Anthropic API. Falls back to manifest/known models when no API key is set. */
 export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
-  if (!apiKey) return KNOWN_CLAUDE_MODELS;
+  if (!apiKey) return getKnownModels('claude');
   try {
     const resp = await fetch('https://api.anthropic.com/v1/models?limit=100', {
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       signal: AbortSignal.timeout(8_000),
     });
-    if (!resp.ok) return KNOWN_CLAUDE_MODELS;
+    if (!resp.ok) return getKnownModels('claude');
     const data = await resp.json() as any;
     const ids = ((data.data ?? []) as any[]).map((m: any) => m.id as string).filter(Boolean).sort();
-    return ids.length > 0 ? ids : KNOWN_CLAUDE_MODELS;
+    return ids.length > 0 ? ids : getKnownModels('claude');
   } catch {
-    return KNOWN_CLAUDE_MODELS;
+    return getKnownModels('claude');
   }
 }
 
@@ -163,6 +151,50 @@ export function writeAgentLog(
   } catch (err: any) {
     logger.warn(`${logPrefix}.agent_log_write_failed`, { taskId, error: err.message });
   }
+}
+
+// ── ACP filesystem sandbox ────────────────────────────────────────────────────
+
+/**
+ * Resolves `filePath` relative to `sandboxRoot` and returns the absolute path
+ * only if it stays inside the sandbox. Returns null for any path that escapes.
+ */
+export function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
+  const resolved = path.isAbsolute(filePath)
+    ? path.normalize(filePath)
+    : path.resolve(sandboxRoot, filePath);
+  const normalRoot = path.resolve(sandboxRoot);
+  return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot
+    ? resolved
+    : null;
+}
+
+// ── Inactivity timer ─────────────────────────────────────────────────────────
+
+/**
+ * Creates a self-resetting inactivity timer shared by all provider implementations.
+ *
+ * The timer fires `onTimeout` if no call to `reset()` arrives within `timeoutMs`.
+ * Call `reset()` on every received message/event so an actively working agent is
+ * never killed by a fixed wall-clock timeout. Call `clear()` when the task
+ * finishes to cancel any pending fire.
+ */
+export function createInactivityTimer(
+  timeoutMs: number,
+  onTimeout: () => void,
+): { reset(): void; clear(): void; readonly fired: boolean } {
+  let handle: ReturnType<typeof setTimeout>;
+  let _fired = false;
+  const reset = () => {
+    clearTimeout(handle);
+    handle = setTimeout(() => { _fired = true; onTimeout(); }, timeoutMs);
+  };
+  reset();
+  return {
+    reset,
+    clear: () => clearTimeout(handle),
+    get fired() { return _fired; },
+  };
 }
 
 // ── Combined "done" helper ────────────────────────────────────────────────────

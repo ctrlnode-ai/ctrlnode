@@ -9,7 +9,6 @@
  */
 import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
-import { Readable, Writable } from 'stream';
 import fs from 'fs';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
@@ -17,14 +16,15 @@ import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
   HERMES_HOME,
-  HERMES_TIMEOUT_MINUTES,
+  TASK_TIMEOUT_MINUTES,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { detectStatusTag, writeTaskOutputs } from './providerFileUtils.js';
+import { detectStatusTag, writeTaskOutputs, createInactivityTimer, resolveSecurePath } from './providerFileUtils.js';
 import { mapAcpUpdate, formatAcpToolCallActivity } from './acpUpdateMapper.js';
 import { HermesProvider } from './HermesProvider.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
+import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection } from './acpCommon.js';
 import {
   getHermesAgentHome,
   setupHermesAgentHome,
@@ -180,11 +180,9 @@ export class HermesAcpProvider implements IProvider {
       : (agentId ? agentHome : CTRLNODE_ROOT);
     const hasAgentsMd = agentId ? !!readHermesAgentsMd(agentId) : false;
     const uiMeta = agentId ? readHermesAgentMeta(agentId) : null;
-    const timeoutMs = HERMES_TIMEOUT_MINUTES * 60_000;
+    const timeoutMs = TASK_TIMEOUT_MINUTES * 60_000;
 
-    const isWindows = process.platform === 'win32';
-    const cmd = isWindows ? 'cmd.exe' : 'hermes';
-    const args = isWindows ? ['/c', 'hermes', 'acp'] : ['acp'];
+    const { cmd, args } = buildAcpSpawnCommand('hermes', ['acp']);
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (agentId && agentInfo) {
@@ -225,35 +223,18 @@ export class HermesAcpProvider implements IProvider {
       return;
     }
 
-    let procExitCode: number | null = null;
-    let earlyExitReject: ((err: Error) => void) | null = null;
-    const earlyExitPromise = new Promise<never>((_res, rej) => {
-      earlyExitReject = rej;
-    });
-    proc.on('error', (err) => {
-      logger.error('hermes_acp.proc_error', { taskId, error: err.message });
-      earlyExitReject?.(err);
-    });
+    const earlyExit = createProcEarlyExit(proc, 'hermes_acp', taskId);
     let stderrText = '';
     proc.stderr?.on('data', (chunk: Buffer) => {
       stderrText += chunk.toString();
     });
-    proc.on('close', (code) => {
-      procExitCode = code;
-      logger.debug('hermes_acp.proc_close', { taskId, code });
-      earlyExitReject?.(new Error(`hermes process exited with code ${code}`));
+
+    const timer = createInactivityTimer(timeoutMs, () => {
+      proc.kill('SIGTERM');
+      logger.warn('hermes_acp.timeout', { taskId, timeoutMinutes: TASK_TIMEOUT_MINUTES });
     });
 
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      proc.kill('SIGTERM');
-      logger.warn('hermes_acp.timeout', { taskId, timeoutMinutes: HERMES_TIMEOUT_MINUTES });
-    }, timeoutMs);
-
-    const output = Writable.toWeb(proc.stdin) as unknown as WritableStream<Uint8Array>;
-    const input = Readable.toWeb(proc.stdout) as unknown as ReadableStream<Uint8Array>;
-    const stream = acp.ndJsonStream(output, input);
+    const stream = createAcpStream(proc);
 
     let accumulatedText = '';
     /** Full transcript for agent_log.md (tools + chunks), not only the final reply. */
@@ -290,6 +271,7 @@ export class HermesAcpProvider implements IProvider {
       },
 
       async sessionUpdate(params) {
+        timer.reset();
         const update = (params as { update?: unknown }).update;
         observeSessionUpdateForModel(modelTracker, update);
         const mapped = mapAcpUpdate(taskId, update);
@@ -345,15 +327,8 @@ export class HermesAcpProvider implements IProvider {
     };
 
     try {
-      const connection = new acp.ClientSideConnection((_agent) => client, stream);
-
       const acpWork = async () => {
-        await connection.initialize({
-          protocolVersion: acp.PROTOCOL_VERSION,
-          clientCapabilities: {
-            fs: { readTextFile: true, writeTextFile: true },
-          },
-        });
+        const connection = await initAcpConnection(stream, client);
 
         const session = await connection.newSession({
           cwd: sessionCwd,
@@ -411,7 +386,7 @@ export class HermesAcpProvider implements IProvider {
         return { promptResult };
       };
 
-      const acpResult = await Promise.race([acpWork(), earlyExitPromise]);
+      const acpResult = await Promise.race([acpWork(), earlyExit.promise]);
       const result = (acpResult as { promptResult?: unknown }).promptResult ?? acpResult;
       const runtimeModel = resolveHermesRuntimeModel(modelTracker, result);
       if (runtimeModel) {
@@ -426,11 +401,11 @@ export class HermesAcpProvider implements IProvider {
           initialSessionModel: modelTracker.initialSessionModel ?? null,
         });
       }
-      earlyExitReject = null;
+      earlyExit.clearReject();
 
-      clearTimeout(timeout);
+      timer.clear();
 
-      if (timedOut) {
+      if (timer.fired) {
         callbacks.onComplete('blocked', 'Task timed out');
       } else if ((result as { stopReason?: string }).stopReason === 'end_turn') {
         if (taskFolderName) {
@@ -464,7 +439,7 @@ export class HermesAcpProvider implements IProvider {
           filesWritten: writtenFiles.length,
           model: runtimeModel ?? agentInfo?.model ?? 'default',
           configuredModel: desiredModel ?? null,
-          exitCode: procExitCode,
+          exitCode: earlyExit.exitCode,
           tokens: usage
             ? {
                 input: usage.inputTokens,
@@ -480,7 +455,7 @@ export class HermesAcpProvider implements IProvider {
         callbacks.onComplete('failed', reason);
       }
     } catch (err) {
-      clearTimeout(timeout);
+      timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('hermes_acp.error', { taskId, error: msg });
       const status = isHermesBlockableError(msg) ? 'blocked' : 'failed';
@@ -521,10 +496,3 @@ When you have finished all work, end your response with one of these tags on its
 ${userPrompt}`;
 }
 
-function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
-  const resolved = path.isAbsolute(filePath)
-    ? path.normalize(filePath)
-    : path.resolve(sandboxRoot, filePath);
-  const normalRoot = path.resolve(sandboxRoot);
-  return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot ? resolved : null;
-}

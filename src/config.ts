@@ -85,9 +85,13 @@ export let PROVIDER = PROVIDERS[0];
 
 // ── Claude Code provider ──────────────────────────────────────────────────────
 
+// ── Shared task timeout ───────────────────────────────────────────────────────
+// Inactivity timeout for all providers. Fires only when the agent produces no
+// output for this many minutes — an actively working agent is never killed.
+export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '10', 10);
+
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
 export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
-export const CLAUDE_TIMEOUT_MINUTES = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || '10', 10);
 // Default true: Claude Code prompts for permission even for tools listed in --allowedTools
 // when running non-interactively. Skip-permissions is required so file writes don't hang.
 export const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS !== 'false';
@@ -95,11 +99,9 @@ export const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS !== '
 // ── Gemini CLI ACP provider ─────────────────────────────────────────────────
 
 
-export const GEMINI_TIMEOUT_MINUTES = parseInt(process.env.GEMINI_TIMEOUT_MINUTES || '10', 10);
 
 // ── Codex SDK provider ───────────────────────────────────────────────────────
 
-export const CODEX_TIMEOUT_MINUTES = parseInt(process.env.CODEX_TIMEOUT_MINUTES || '10', 10);
 
 // ── Cursor SDK provider ──────────────────────────────────────────────────────
 // Provider name: "cursor" — uses @cursor/sdk programmatic API
@@ -107,7 +109,6 @@ export const CODEX_TIMEOUT_MINUTES = parseInt(process.env.CODEX_TIMEOUT_MINUTES 
 // so startup validation can warn early if the key is missing.
 
 export let CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
-export const CURSOR_TIMEOUT_MINUTES = parseInt(process.env.CURSOR_TIMEOUT_MINUTES || '10', 10);
 
 // ── Claude Agent SDK provider ─────────────────────────────────────────────────
 // Provider name: "claude-sdk" — uses @anthropic-ai/claude-agent-sdk programmatic API
@@ -118,7 +119,6 @@ export let ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 export const CLAUDE_SDK_TOOLS = process.env.CLAUDE_SDK_TOOLS || 'Read,Write,Edit,Bash,Glob,Grep';
 export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '50', 10);
-export const CLAUDE_SDK_TIMEOUT_MINUTES = parseInt(process.env.CLAUDE_SDK_TIMEOUT_MINUTES || '10', 10);
 /** bypassPermissions | acceptEdits | dontAsk — default bypassPermissions for unattended agents */
 export const CLAUDE_SDK_PERMISSION_MODE = process.env.CLAUDE_SDK_PERMISSION_MODE || 'bypassPermissions';
 /**
@@ -151,13 +151,11 @@ export const CLAUDE_SDK_EXECUTABLE = (() => {
 // See hermesProfile.ts for profile path logic.
 
 export const HERMES_HOME = process.env.HERMES_HOME || '';
-export const HERMES_TIMEOUT_MINUTES = parseInt(process.env.HERMES_TIMEOUT_MINUTES || '15', 10);
 // HERMES_USE_ACP=false forces hermes chat -Q -q (CLI) instead of hermes acp
 
 // ── Copilot ACP provider ──────────────────────────────────────────────────────
 
 
-export const COPILOT_TIMEOUT_MINUTES = parseInt(process.env.COPILOT_TIMEOUT_MINUTES || '10', 10);
 
 // ── Non-OpenClaw agents base folder ──────────────────────────────────────────
 // All non-OpenClaw providers (Cursor, Gemini, Codex, Copilot, Claude) use this
@@ -229,7 +227,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.2';
+export const BRIDGE_VERSION = 'v2026.2.4';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 

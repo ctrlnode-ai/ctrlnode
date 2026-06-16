@@ -22,6 +22,7 @@ import {
   handleActivatePipelineTask,
 } from './filesystemConfigHandlers.js';
 import { handleIntentAction, handleInvokeTool } from './intentHandlers.js';
+import { applyManifestFromServer } from './modelManifest.js';
 
 /** Actions that only make sense for the OpenClaw provider */
 const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'invoke_tool', 'init_ping']);
@@ -118,6 +119,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'sync_hermes_agents':
       handleSyncProviderAgents('hermes', msg, ctx);
+      break;
+    case 'model_manifest':
+      applyManifestFromServer(msg as any);
       break;
     default:
       break;

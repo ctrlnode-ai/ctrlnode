@@ -9,7 +9,7 @@
 ### Orchestrate AI coding agents — tasks, routines, and workflows — from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.2-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
+[![Release](https://img.shields.io/badge/release-v2.4-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
 [![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMEExMCAxMCAwIDAgMCAxMiAyeiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://ctrlnode.ai)
 
 [Website](https://ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases) · [Bridge setup](src/bridge/README.md)
@@ -24,13 +24,11 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 
 ---
 
-## What's new in v2.2 and 2.3
+## What's new in v2.4
 
-- **Hermes provider** — native support for Hermes agents via ACP; each agent gets its own isolated profile
-- **Binary renamed** — `ctrlnode-bridge` is now just `ctrlnode`; install scripts update PATH automatically
-- **Setup wizard** — run `ctrlnode --setup` to configure workspace and pairing token interactively; config is saved and reused on every subsequent run
-- **Model selection** — choose the exact AI model per agent (claude-sonnet-4-6, gpt-5.5, gemini-3.1-pro, …); the Bridge reports available models on connect and the UI surfaces them as a searchable drop-down
-- **Claude-opus-4-8** — is now included in the known-models fallback lists for Anthropic, Copilot, and Cursor providers. When no API key is configured the model is available immediately; with an API key it is returned directly from the live API.
+- **Auto-update** — Bridge checks for a newer version on startup, shows a prompt with the release link, and replaces itself with one keypress. Skipped automatically when running non-interactively.
+- **Live model updates** — model lists are now fetched from the server on startup and refreshed after every connection. New models (including **Claude Fable 5** and **Claude Mythos 5**) become available without reinstalling the Bridge.
+- **Fix: task completion debounce** — agents that write multiple output files in sequence no longer trigger a premature done signal; Bridge waits 45 s after the last file write before closing the task.
 
 ---
 
