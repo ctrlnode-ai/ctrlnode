@@ -62,7 +62,7 @@ if (Test-Path $dest) {
   }
   Remove-Item $dest -Force
 }
-Copy-Item $srcFile $dest -Force
+Copy-Item $tmpFile $dest -Force
 
 Write-Host ""
 Write-Host "OK  Installed: $dest" -ForegroundColor Green
