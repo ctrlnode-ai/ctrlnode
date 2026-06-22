@@ -180,7 +180,10 @@ if [ -t 1 ] && [ -e /dev/tty ]; then
       ;;
     *)
       echo "Starting ctrlnode..."
-      BASE_PATH="$WORKSPACE_ROOT" "$DEST"
+      # Redirect stdin from /dev/tty so ctrlnode's readline reads from the
+      # terminal, not the curl pipe. Without this, readline captures the
+      # prompt text itself as the answer and saves a corrupted PAIRING_TOKEN.
+      BASE_PATH="$WORKSPACE_ROOT" "$DEST" < /dev/tty
       ;;
   esac
 fi
