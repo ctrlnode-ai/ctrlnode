@@ -49,6 +49,26 @@ try {
   console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
 } catch { /* no .env file — fine */ }
 
+// ── Linux TLS: ensure the npm ws package can find CA certificates ─────────────
+// Bun x64-baseline on minimal Linux images has no default CA bundle path.
+// The npm ws package uses node:https which reads SSL_CERT_FILE / SSL_CERT_DIR.
+// Auto-detect the system CA bundle and set SSL_CERT_FILE before any TLS socket
+// is opened (this module is loaded first, before websocket.ts).
+if (process.platform === 'linux' && !process.env.SSL_CERT_FILE) {
+  const caPaths = [
+    '/etc/ssl/certs/ca-certificates.crt', // Debian / Ubuntu
+    '/etc/pki/tls/certs/ca-bundle.crt',   // RHEL / CentOS
+    '/etc/ssl/ca-bundle.pem',             // openSUSE
+    '/etc/ssl/cert.pem',                  // Alpine
+  ];
+  for (const p of caPaths) {
+    if (fs.existsSync(p)) {
+      process.env.SSL_CERT_FILE = p;
+      break;
+    }
+  }
+}
+
 // ── WebSocket / SaaS ──────────────────────────────────────────────────────────
 
 export let SAAS_URL = process.env.SAAS_URL || 'wss://api.ctrlnode.ai/ws/bridge';

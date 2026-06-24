@@ -10,7 +10,13 @@ set -e
 
 REPO="ctrlnode-ai/ctrlnode"
 BINARY_NAME="ctrlnode"
-DEFAULT_DIR="/usr/local/bin"
+# Default to ~/.local/bin when not root (no sudo needed).
+# Pass --dir /usr/local/bin to install system-wide.
+if [ "$(id -u)" -eq 0 ]; then
+  DEFAULT_DIR="/usr/local/bin"
+else
+  DEFAULT_DIR="$HOME/.local/bin"
+fi
 INSTALL_DIR="$DEFAULT_DIR"
 
 # --- parse args ---
@@ -133,7 +139,6 @@ else
 fi
 
 # --- install ---
-mkdir -p "$INSTALL_DIR"
 DEST="${INSTALL_DIR}/${BINARY_NAME}"
 
 # Stop any running instance before replacing the binary
@@ -143,14 +148,15 @@ if [ -f "$DEST" ]; then
   fi
 fi
 
+mkdir -p "$INSTALL_DIR"
 if [ -w "$INSTALL_DIR" ]; then
   cp "$TMP_FILE" "$DEST"
+  chmod +x "$DEST"
 else
   echo "Requires sudo to install to $INSTALL_DIR..."
   sudo cp "$TMP_FILE" "$DEST"
+  sudo chmod +x "$DEST"
 fi
-
-chmod +x "$DEST"
 
 # macOS: remove quarantine flag
 if [ "$OS" = "Darwin" ]; then
@@ -161,8 +167,38 @@ echo ""
 echo "OK  Installed: $DEST"
 echo "    Version:   $TAG"
 echo ""
-echo "Next: start the Bridge:"
-echo "  ctrlnode"
+
+# Ensure ~/.local/bin is in PATH when using user-local install
+PATH_UPDATED=0
+if [ "$INSTALL_DIR" = "$HOME/.local/bin" ]; then
+  if [ -n "$SHELL_RC" ] && ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+    PATH_UPDATED=1
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  hash -r 2>/dev/null || true
+fi
+
+# If run as root via sudo, fix ownership of ~/.ctrlnode so the real user can write to it
+if [ "$(id -u)" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+  REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 2>/dev/null || echo "")"
+  if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME/.ctrlnode" ]; then
+    chown -R "$SUDO_USER:$SUDO_USER" "$REAL_HOME/.ctrlnode" 2>/dev/null || true
+    echo "    Fixed ownership of $REAL_HOME/.ctrlnode -> $SUDO_USER"
+  fi
+fi
+if [ "$PATH_UPDATED" -eq 1 ]; then
+  echo "┌─────────────────────────────────────────────────────┐"
+  echo "│  IMPORTANT: reload your shell before running ctrlnode  │"
+  echo "│                                                         │"
+  echo "│    source $SHELL_RC"
+  echo "│                                                         │"
+  echo "│  Then start the Bridge:  ctrlnode                       │"
+  echo "└─────────────────────────────────────────────────────┘"
+else
+  echo "Next: start the Bridge:"
+  echo "  ctrlnode"
+fi
 echo ""
 echo "Workspace: $WORKSPACE_ROOT"
 echo "When you run the Bridge for the first time, it will prompt for your pairing token or read it from a .env file."
