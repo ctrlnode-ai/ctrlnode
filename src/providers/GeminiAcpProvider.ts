@@ -19,6 +19,7 @@ import { getKnownModels } from '../modelManifest.js';
 
 export class GeminiAcpProvider implements IProvider {
   readonly providerName = 'gemini';
+  private readonly _activeRuns = new Map<string, import('child_process').ChildProcess>();
 
   async discoverAgents(): Promise<AgentSummary[]> {
     // Gemini agents are registered exclusively via sync_gemini_agents (pushed
@@ -55,6 +56,18 @@ export class GeminiAcpProvider implements IProvider {
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
   }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc) return;
+    logger.info('gemini_provider.cancel', { taskId });
+    if (!proc.killed) proc.kill('SIGTERM');
+    this._activeRuns.delete(taskId);
+  }
+
+  deliverInput = async (taskId: string, _text: string): Promise<void> => {
+    logger.warn('deliverInput not yet supported for ACP interaction', { taskId, provider: this.providerName });
+  };
 
   async dispose(): Promise<void> {}
 
@@ -160,6 +173,8 @@ export class GeminiAcpProvider implements IProvider {
       shell: false,
     });
 
+    this._activeRuns.set(taskId, proc);
+
     if (!proc.stdin || !proc.stdout) {
       callbacks.onComplete('failed', 'Failed to start gemini ACP process');
       return;
@@ -197,6 +212,7 @@ export class GeminiAcpProvider implements IProvider {
           return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
         }
         logger.warn('gemini_acp.permission_cancelled', { taskId, tool: params.toolCall?.title });
+        callbacks.onWaitingForInput?.(params.toolCall?.title);
         return { outcome: { outcome: 'cancelled' } };
       },
 
@@ -330,6 +346,7 @@ export class GeminiAcpProvider implements IProvider {
       logger.error('gemini_acp.error', { taskId, error: msg });
       callbacks.onComplete('failed', msg);
     } finally {
+      this._activeRuns.delete(taskId);
       proc.stdin.end();
       if (!proc.killed) proc.kill('SIGTERM');
       if (wroteGeminiMd) {

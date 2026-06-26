@@ -18,6 +18,7 @@ import { buildAcpSpawnCommand, createAcpStream, initAcpConnection } from './acpC
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';
+  private readonly _activeRuns = new Map<string, import('child_process').ChildProcess>();
 
   async discoverAgents(): Promise<AgentSummary[]> {
     // Copilot agents are registered exclusively via sync_copilot_agents (pushed
@@ -115,6 +116,8 @@ export class CopilotAcpProvider implements IProvider {
       shell: false,
     });
 
+    this._activeRuns.set(taskId, proc);
+
     if (!proc.stdin || !proc.stdout) {
       callbacks.onComplete('failed', 'Failed to start copilot ACP process');
       return;
@@ -147,8 +150,9 @@ export class CopilotAcpProvider implements IProvider {
           logger.info('copilot_acp.permission_granted', { taskId, tool: params.toolCall?.title, optionId: allowOption.optionId });
           return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
         }
-        // No allow option available — cancel to avoid hanging.
+        // No allow option available — notify UI and cancel to avoid hanging.
         logger.warn('copilot_acp.permission_cancelled', { taskId, tool: params.toolCall?.title });
+        callbacks.onWaitingForInput?.(params.toolCall?.title);
         return { outcome: { outcome: 'cancelled' } };
       },
 
@@ -268,10 +272,23 @@ export class CopilotAcpProvider implements IProvider {
       logger.error('copilot_acp.error', { taskId, error: msg });
       callbacks.onComplete('failed', msg);
     } finally {
+      this._activeRuns.delete(taskId);
       proc.stdin.end();
       if (!proc.killed) proc.kill('SIGTERM');
     }
   }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc) return;
+    logger.info('copilot_provider.cancel', { taskId });
+    if (!proc.killed) proc.kill('SIGTERM');
+    this._activeRuns.delete(taskId);
+  }
+
+  deliverInput = async (taskId: string, _text: string): Promise<void> => {
+    logger.warn('deliverInput not yet supported for ACP interaction', { taskId, provider: this.providerName });
+  };
 }
 
 // ── ACP update normalisation ─────────────────────────────────────────────────

@@ -53,6 +53,7 @@ import {
 export class HermesAcpProvider implements IProvider {
   readonly providerName = 'hermes';
 
+  private readonly _activeRuns = new Map<string, import('child_process').ChildProcess>();
   private readonly cliFallback = new HermesProvider();
   private acpAvailable: boolean | null = null;
 
@@ -218,6 +219,8 @@ export class HermesAcpProvider implements IProvider {
       shell: false,
     });
 
+    this._activeRuns.set(taskId, proc);
+
     if (!proc.stdin || !proc.stdout) {
       callbacks.onComplete('failed', 'Failed to start hermes ACP process');
       return;
@@ -267,6 +270,7 @@ export class HermesAcpProvider implements IProvider {
           return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
         }
         logger.warn('hermes_acp.permission_cancelled', { taskId, tool: params.toolCall?.title });
+        callbacks.onWaitingForInput?.(params.toolCall?.title);
         return { outcome: { outcome: 'cancelled' } };
       },
 
@@ -461,10 +465,23 @@ export class HermesAcpProvider implements IProvider {
       const status = isHermesBlockableError(msg) ? 'blocked' : 'failed';
       callbacks.onComplete(status, msg);
     } finally {
+      this._activeRuns.delete(taskId);
       proc.stdin.end();
       if (!proc.killed) proc.kill('SIGTERM');
     }
   }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc) return;
+    logger.info('hermes_acp_provider.cancel', { taskId });
+    if (!proc.killed) proc.kill('SIGTERM');
+    this._activeRuns.delete(taskId);
+  }
+
+  deliverInput = async (taskId: string, _text: string): Promise<void> => {
+    logger.warn('deliverInput not yet supported for ACP interaction', { taskId, provider: this.providerName });
+  };
 }
 
 function resolveTaskPrompt(params: DispatchTaskParams): string {

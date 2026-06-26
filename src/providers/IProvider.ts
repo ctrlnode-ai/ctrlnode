@@ -23,6 +23,8 @@ export interface TaskCallbacks {
   onComplete(status: 'completed' | 'failed' | 'blocked', reason?: string): void;
   /** Called when the provider discovers the real model name (e.g. from claude system/init). Optional. */
   onModelDiscovered?(model: string): void;
+  /** Called when the provider is blocked waiting for user input (e.g. a permission prompt). */
+  onWaitingForInput?(prompt?: string): void;
 }
 
 export interface SendToSessionParams {
@@ -33,6 +35,8 @@ export interface SendToSessionParams {
   message: string;
   intentType: string;
   executionId?: string;
+  /** CtrlNode-relative folder for the task (e.g. tasks/proyecto/06-25/uuid-slug). Bridge uses it to number followup files. */
+  taskFolderName?: string;
 }
 
 export interface IProvider {
@@ -59,6 +63,18 @@ export interface IProvider {
    * Returns an empty array when not supported or the API call fails.
    */
   listModels?(): Promise<string[]>;
+
+  /**
+   * Optional: abort a currently-running task by taskId.
+   * No-op when taskId is not currently active in this provider.
+   */
+  cancelRun?(taskId: string): Promise<void>;
+
+  /**
+   * Optional: deliver a user's text response to a task currently waiting for input.
+   * No-op when taskId is not in a waiting state.
+   */
+  deliverInput?(taskId: string, text: string): Promise<void>;
 
   /**
    * Optional: returns true if the underlying tool/SDK is available on this machine.

@@ -62,6 +62,7 @@ export class ClaudeCodeProvider implements IProvider {
   readonly providerName = 'claude';
   /** taskId → session_id from previous runs, used for --resume on followup */
   private sessionCache = new Map<string, string>();
+  private readonly _activeRuns = new Map<string, import('child_process').ChildProcess>();
 
   async discoverAgents(): Promise<AgentSummary[]> {
     // Claude agents are registered exclusively via sync_claude_agents (pushed
@@ -141,6 +142,25 @@ export class ClaudeCodeProvider implements IProvider {
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
   }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc) return;
+    logger.info('claude_provider.cancel', { taskId });
+    proc.kill('SIGTERM');
+    setTimeout(() => { if (!proc.killed) proc.kill('SIGKILL'); }, 3000);
+    this._activeRuns.delete(taskId);
+  }
+
+  deliverInput = async (taskId: string, text: string): Promise<void> => {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc?.stdin?.writable) {
+      logger.warn('deliverInput: no active process for task', { taskId });
+      return;
+    }
+    proc.stdin.write(text + '\n');
+    logger.info('deliverInput: sent to claude stdin', { taskId });
+  };
 
   async dispose(): Promise<void> {}
 
@@ -257,6 +277,8 @@ export class ClaudeCodeProvider implements IProvider {
       env: { ...process.env },
       stdio: [stdinContent != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+
+    if (opts.taskId) this._activeRuns.set(opts.taskId, proc);
 
     // If we have task content to pipe, write it to stdin then close the pipe.
     // Claude reads it as additional context before processing the -p instruction.
@@ -383,6 +405,7 @@ export class ClaudeCodeProvider implements IProvider {
 
     await new Promise<void>((resolve) => {
       proc.on('close', (code) => {
+        if (opts.taskId) this._activeRuns.delete(opts.taskId);
         timer.clear();
 
         if (sessionId && taskId) {
@@ -403,6 +426,7 @@ export class ClaudeCodeProvider implements IProvider {
       });
 
       proc.on('error', (err) => {
+        if (opts.taskId) this._activeRuns.delete(opts.taskId);
         timer.clear();
         logger.error('claude_provider.spawn_error', { taskId, error: err.message });
         callbacks.onComplete('failed', err.message);
