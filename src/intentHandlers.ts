@@ -6,6 +6,7 @@ import { resolveTargetAgentId } from './agentRouting.js';
 import { getIntentProviderMethod } from './intentDispatchPolicy.js';
 import { setAgentRunning } from './websocket.js';
 import { handleInvokeTool } from './openclawInvoker.js';
+import { prepareFollowupFiles } from './providers/providerFileUtils.js';
 
 /**
  * Main entry point for action-based intents from SaaS.
@@ -82,6 +83,9 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
           onModelDiscovered: (model) => {
             ctx.sendToSaas({ action: 'task_model_update', taskId: contextTaskId, model });
           },
+          onWaitingForInput: (prompt) => {
+            ctx.sendToSaas({ action: 'task_waiting_for_input', agentId: targetId, taskId: contextTaskId, prompt });
+          },
           onComplete: (status, reason) => {
             ctx.sendToSaas({ action: 'task_complete', agentId: targetId, taskId: contextTaskId, status, reason, source: 'provider' });
             ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, result: status });
@@ -115,7 +119,26 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
   // ── followup / agent_command / init_ping: delegate to provider.sendToSession ─
   if (intentType === 'followup' || intentType === 'agent_command') {
     const message = parsedArgs?.message || content || '';
+    const taskFolderName: string | undefined = parsedArgs?.taskFolderName;
     setAgentRunning(targetId!);
+
+    // Write followup input file and build output-file instruction for all providers.
+    // Providers with native session resume get only the output-file instruction.
+    // Stateless providers (codex, hermes-acp, gemini-acp, copilot-acp) also receive
+    // the prior agent_log.md as context so the agent knows what was done before.
+    const providerName = ctx.provider.providerName;
+    const hasNativeSession = providerName === 'claude-agent-sdk' || providerName === 'claude-code'
+      || providerName === 'openclaw' || providerName === 'cursor';
+    let augmentedMessage = message;
+    if (intentType === 'followup' && (contextTaskId || taskFolderName)) {
+      try {
+        const { followupLogBlock, followupLogBlockWithHistory } = prepareFollowupFiles(contextTaskId || '', message, taskFolderName);
+        const block = hasNativeSession ? followupLogBlock : followupLogBlockWithHistory;
+        augmentedMessage = `<system>\n${block}\n</system>\n\n${message}`;
+      } catch (e: any) {
+        logger.warn('intent.followup_file_prep_failed', { taskId: contextTaskId, error: e?.message });
+      }
+    }
 
     try {
       await ctx.provider.sendToSession(
@@ -124,9 +147,10 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
           taskId: contextTaskId || '',
           sessionId: parsedArgs?.sessionId || parsedArgs?.session_id,
           sessionKey: parsedArgs?.sessionKey,
-          message,
+          message: augmentedMessage,
           intentType,
           executionId,
+          taskFolderName,
         },
         {
           onStream: (event) => {
@@ -141,6 +165,9 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
             ctx.sendToSaas({ action: 'agent_activity', agentId: targetId, taskId: contextTaskId, delta: text });
           },
           onComplete: (status, reason) => {
+            // followup runs in the same session as the original task — emit task_complete so
+            // the backend transitions the task back to done/failed after the followup finishes.
+            ctx.sendToSaas({ action: 'task_complete', agentId: targetId, taskId: contextTaskId, status, reason, source: 'provider' });
             ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, result: status, ...(reason ? { error: reason } : {}) });
           },
         }

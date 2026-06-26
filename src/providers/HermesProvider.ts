@@ -60,6 +60,7 @@ export class HermesProvider implements IProvider {
 
   /** agentId → Hermes conversation_id (persisted to .hermes-sessions/ on disk) */
   private conversationIds: Map<string, string>;
+  private readonly _activeRuns = new Map<string, import('child_process').ChildProcess>();
 
   private get sessionsDir(): string {
     return path.join(CTRLNODE_ROOT, '.hermes-sessions');
@@ -200,11 +201,14 @@ export class HermesProvider implements IProvider {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      this._activeRuns.set(taskId, proc);
+
       let taskTimer: ReturnType<typeof createInactivityTimer>;
 
       const finish = (status: 'completed' | 'failed' | 'blocked', reason?: string) => {
         if (settled) return;
         settled = true;
+        this._activeRuns.delete(taskId);
         taskTimer.clear();
         logProc.kill();
         if (logBuffer.trim()) {
@@ -288,6 +292,14 @@ export class HermesProvider implements IProvider {
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
+  }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const proc = this._activeRuns.get(taskId);
+    if (!proc) return;
+    logger.info('hermes_provider.cancel', { taskId });
+    if (!proc.killed) proc.kill('SIGTERM');
+    this._activeRuns.delete(taskId);
   }
 
   async dispose(): Promise<void> {}

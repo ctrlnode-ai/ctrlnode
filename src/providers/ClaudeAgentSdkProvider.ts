@@ -112,6 +112,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
   /** taskId → session_id from previous runs, used for resume on followup. */
   private sessionCache = new Map<string, string>();
+  private readonly _activeAborts = new Map<string, AbortController>();
 
   async discoverAgents(): Promise<AgentSummary[]> {
     // Like ClaudeCodeProvider, agents are registered via sync_claude_sdk_agents from SaaS.
@@ -133,6 +134,11 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     const dispatch = resolveRepoDispatchSpawn(params, CTRLNODE_ROOT);
     const { taskFolder, outputFolder, spawnCwd: cwd, isRepoMode, extraDirectories } = dispatch;
+
+    // Clear any previous session so a fresh dispatch never resumes a stale session (e.g. RERUN).
+    this.sessionCache.delete(taskId);
+    const sessionFile = path.join(CTRLNODE_ROOT, 'tasks', taskId, 'session_id');
+    if (fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile);
     fs.mkdirSync(outputFolder, { recursive: true });
 
     // Write CLAUDE.md so SDK picks up role/instructions for this agent.
@@ -190,15 +196,23 @@ export class ClaudeAgentSdkProvider implements IProvider {
       additionalDirectories,
       appendSystemPrompt: systemBlock,
       model: agentModel,
-      persistSession: false, // one-shot dispatch — no session saved to disk
+      persistSession: true, // save session so followup can resume with full history
       outputFolder,
       callbacks,
     });
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
-    const { taskId, message, agentId } = params;
-    const prevSessionId = this.sessionCache.get(taskId);
+    const { taskId, message, agentId, taskFolderName } = params;
+    const taskFolderForSession = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+    const sessionFile = path.join(taskFolderForSession, 'session_id');
+    const prevSessionId = this.sessionCache.get(taskId)
+      ?? (fs.existsSync(sessionFile) ? fs.readFileSync(sessionFile, 'utf-8').trim() : undefined);
+    if (prevSessionId) {
+      logger.info('claude_sdk_provider.session_resume', { taskId, sessionId: prevSessionId, source: this.sessionCache.has(taskId) ? 'memory' : 'disk' });
+    } else {
+      logger.warn('claude_sdk_provider.session_resume_missing', { taskId });
+    }
     const agentInfo = discoveredAgents[agentId];
     const agentModel = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
 
@@ -213,6 +227,9 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const providerTasksRoot = CTRLNODE_ROOT;
     fs.mkdirSync(providerTasksRoot, { recursive: true });
 
+    // The followup input file was already written and the output-file instruction block
+    // was injected into `message` by intentHandlers.ts (via prepareFollowupFiles).
+    // Parse it out here so we can add claudeMd alongside it in the system prompt.
     const { taskBody: sessionBody, instructionsBlock: sessionInstructions } = splitPromptInstructions(message);
     const sessionSystemParts: string[] = [];
     if (claudeMdContent) sessionSystemParts.push(claudeMdContent);
@@ -238,6 +255,14 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
+  }
+
+  async cancelRun(taskId: string): Promise<void> {
+    const abort = this._activeAborts.get(taskId);
+    if (!abort) return;
+    logger.info('claude_sdk_provider.cancel', { taskId });
+    abort.abort();
+    this._activeAborts.delete(taskId);
   }
 
   async dispose(): Promise<void> {}
@@ -319,6 +344,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const timeoutMs = TASK_TIMEOUT_MINUTES * 60 * 1000;
     const abortController = new AbortController();
     options.abortController = abortController;
+    this._activeAborts.set(taskId, abortController);
 
     const timer = createInactivityTimer(timeoutMs, () => {
       abortController.abort();
@@ -439,6 +465,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
       }
     } catch (err: any) {
       timer.clear();
+      this._activeAborts.delete(taskId);
       const isAbort = err?.name === 'AbortError'
         || (err?.message ?? '').toLowerCase().includes('aborted');
       if (isAbort) {
@@ -451,9 +478,20 @@ export class ClaudeAgentSdkProvider implements IProvider {
     }
 
     timer.clear();
+    this._activeAborts.delete(taskId);
 
     if (sessionId && taskId) {
       this.sessionCache.set(taskId, sessionId);
+      // Persist to disk keyed by taskId UUID so followup can resume even after a Bridge restart.
+      // Always use CTRLNODE_ROOT/tasks/<taskId>/ regardless of taskFolderName (which may vary).
+      const sessionDir = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+      try {
+        fs.mkdirSync(sessionDir, { recursive: true });
+        fs.writeFileSync(path.join(sessionDir, 'session_id'), sessionId, 'utf-8');
+        logger.info('claude_sdk_provider.session_persisted', { taskId, sessionId });
+      } catch (e: any) {
+        logger.warn('claude_sdk_provider.session_persist_failed', { taskId, error: e?.message });
+      }
     }
 
     const relTaskFolder = taskFolderName

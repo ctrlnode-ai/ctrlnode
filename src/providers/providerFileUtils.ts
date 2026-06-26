@@ -192,3 +192,81 @@ export function writeTaskOutputs(
     writeAgentLog(taskId, taskFullPath, logBody, logPrefix);
   }
 }
+
+// ── Followup file preparation (shared across all providers) ───────────────────
+
+export interface FollowupFileResult {
+  /** Absolute path to the written input file (e.g. .../input/ea94c3f8-followup-2.md) */
+  followupInputFile: string;
+  /** CtrlNode-relative output path the agent should write to (e.g. tasks/.../output/ea94c3f8-followup-2-output.md) */
+  followupOutputRel: string;
+  /** Instruction block to inject into the agent prompt (output file instruction only) */
+  followupLogBlock: string;
+  /** Same as followupLogBlock but also includes the agent_log.md content as prior-context */
+  followupLogBlockWithHistory: string;
+  /** Sequential number used (1-based) */
+  followupN: number;
+  /** Base name without extension (e.g. "ea94c3f8-followup-2") */
+  followupBaseName: string;
+}
+
+/**
+ * Writes the followup input file to disk and returns naming info.
+ * Called by intentHandlers before dispatching to any provider so all providers
+ * get consistent followup file handling without duplicating this logic.
+ *
+ * `followupLogBlock`            — output-file instruction only (for providers with native session resume)
+ * `followupLogBlockWithHistory` — same + agent_log.md content prepended (for stateless providers)
+ */
+export function prepareFollowupFiles(
+  taskId: string,
+  message: string,
+  taskFolderName: string | undefined,
+): FollowupFileResult {
+  const taskFolderAbs = taskFolderName
+    ? path.join(CTRLNODE_ROOT, taskFolderName)
+    : path.join(CTRLNODE_ROOT, 'tasks', taskId);
+
+  const folderBasename = taskFolderName ? path.basename(taskFolderName) : taskId.slice(0, 8);
+  const shortId = folderBasename.split('-')[0] ?? taskId.slice(0, 8);
+
+  const inputDir = path.join(taskFolderAbs, 'input');
+  fs.mkdirSync(inputDir, { recursive: true });
+
+  const existingFollowups = fs.existsSync(inputDir)
+    ? fs.readdirSync(inputDir).filter(f => f.match(/^[^-]+-followup-\d+\.md$/)).length
+    : 0;
+  const followupN = existingFollowups + 1;
+  const followupBaseName = `${shortId}-followup-${followupN}`;
+  const followupInputFile = path.join(inputDir, `${followupBaseName}.md`);
+  const followupOutputRel = taskFolderName
+    ? `${taskFolderName}/output/${followupBaseName}-output.md`
+    : `tasks/${taskId}/output/${followupBaseName}-output.md`;
+
+  try {
+    fs.writeFileSync(followupInputFile, message, 'utf-8');
+    logger.info('followup_files.input_written', { taskId, file: `${followupBaseName}.md`, n: followupN });
+  } catch (e: any) {
+    logger.warn('followup_files.input_write_failed', { taskId, error: e?.message });
+  }
+
+  const followupLogBlock = `## Follow-up output file\n\nWrite your follow-up result to this file using the Write tool:\n\`${followupOutputRel}\``;
+
+  // Try to load agent_log.md from the previous run so stateless providers have prior context.
+  const agentLogPath = path.join(taskFolderAbs, 'output', 'agent_log.md');
+  let followupLogBlockWithHistory = followupLogBlock;
+  try {
+    if (fs.existsSync(agentLogPath)) {
+      const logContent = fs.readFileSync(agentLogPath, 'utf-8').trim();
+      if (logContent) {
+        followupLogBlockWithHistory =
+          `## Prior task conversation log\n\nThe following is the conversation log from the previous task run. Use it as context to understand what was already done before responding to the follow-up.\n\n${logContent}\n\n---\n\n${followupLogBlock}`;
+        logger.info('followup_files.history_loaded', { taskId, logBytes: logContent.length });
+      }
+    }
+  } catch (e: any) {
+    logger.warn('followup_files.history_load_failed', { taskId, error: e?.message });
+  }
+
+  return { followupInputFile, followupOutputRel, followupLogBlock, followupLogBlockWithHistory, followupN, followupBaseName };
+}

@@ -54,6 +54,7 @@ async function fetchOpenAiModels(): Promise<string[]> {
 
 export class CodexSdkProvider implements IProvider {
   readonly providerName = 'codex';
+  private readonly _cancelFlags = new Map<string, boolean>();
 
   async discoverAgents(): Promise<AgentSummary[]> {
     // Codex agents are registered exclusively via sync_codex_agents (pushed
@@ -267,8 +268,10 @@ export class CodexSdkProvider implements IProvider {
       const { events } = await thread.runStreamed(wrappedPrompt);
       logger.info('codex_sdk.events_stream_open', { taskId });
 
+      this._cancelFlags.set(taskId, false);
       let eventCount = 0;
       for await (const event of events) {
+        if (this._cancelFlags.get(taskId)) break;
         timer.reset();
         if (timer.fired) break;
 
@@ -373,6 +376,7 @@ export class CodexSdkProvider implements IProvider {
       }
 
       logger.info('codex_sdk.events_stream_closed', { taskId, totalEvents: eventCount });
+      this._cancelFlags.delete(taskId);
       timer.clear();
 
       if (timer.fired) {
@@ -388,12 +392,19 @@ export class CodexSdkProvider implements IProvider {
       callbacks.onComplete(completion.status, completion.reason);
 
     } catch (err) {
+      this._cancelFlags.delete(taskId);
       timer.clear();
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       logger.error('codex_sdk.error', { taskId, error: msg, stack });
       callbacks.onComplete('failed', msg);
     }
+  }
+
+  async cancelRun(taskId: string): Promise<void> {
+    if (!this._cancelFlags.has(taskId)) return;
+    logger.info('codex_sdk_provider.cancel', { taskId });
+    this._cancelFlags.set(taskId, true);
   }
 }
 

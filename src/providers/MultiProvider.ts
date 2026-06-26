@@ -82,6 +82,37 @@ export class MultiProvider implements IProvider {
     logger.warn('multi_provider.invoke_tool_unhandled', { agentId });
   }
 
+  // ── Cancellation & input relay ────────────────────────────────────────────────
+
+  async cancelRun(taskId: string): Promise<void> {
+    // Fan out to all sub-providers — each silently no-ops if it doesn't own this taskId.
+    const cancellers = this.providers.filter(p => typeof p.cancelRun === 'function');
+    if (cancellers.length === 0) {
+      logger.warn('multi_provider.cancel_run_not_supported', { taskId });
+      return;
+    }
+    await Promise.allSettled(cancellers.map(p => p.cancelRun!(taskId)));
+    logger.info('multi_provider.cancel_run_dispatched', { taskId, providers: cancellers.map(p => p.providerName) });
+  }
+
+  async deliverInput(taskId: string, text: string): Promise<void> {
+    let handled = false;
+    for (const p of this.providers) {
+      if (typeof p.deliverInput === 'function') {
+        try {
+          await p.deliverInput(taskId, text);
+          handled = true;
+          break;
+        } catch {
+          // try next
+        }
+      }
+    }
+    if (!handled) {
+      logger.warn('multi_provider.deliver_input_not_supported', { taskId });
+    }
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   async dispose(): Promise<void> {
