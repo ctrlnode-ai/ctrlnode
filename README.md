@@ -9,7 +9,7 @@
 ### Orchestrate AI coding agents — tasks, routines, and workflows — from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.4-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
+[![Release](https://img.shields.io/badge/release-v2.5-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
 [![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMEExMCAxMCAwIDAgMCAxMiAyeiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://ctrlnode.ai)
 
 [Website](https://ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases) · [Bridge setup](src/bridge/README.md)
@@ -24,11 +24,12 @@ Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combinat
 
 ---
 
-## What's new in v2.4
+## What's new in v2.5
 
-- **Auto-update** — Bridge checks for a newer version on startup, shows a prompt with the release link, and replaces itself with one keypress. Skipped automatically when running non-interactively.
-- **Live model updates** — model lists are now fetched from the server on startup and refreshed after every connection. New models (including **Claude Fable 5** and **Claude Mythos 5**) become available without reinstalling the Bridge.
-- **Fix: task completion debounce** — agents that write multiple output files in sequence no longer trigger a premature done signal; Bridge waits 45 s after the last file write before closing the task.
+- **Task cancellation** — cancel a running task from the UI at any time; Bridge signals the active provider immediately (SIGTERM for CLI/ACP processes, AbortController for the Claude SDK, cancel flag for Codex).
+- **User input delivery** — when an ACP agent hits a permission prompt it cannot auto-approve, it now notifies the UI with a `task_waiting_for_input` event instead of silently failing; Claude Code supports writing the response directly to stdin.
+- **Persistent session resume** — follow-up tasks dispatched to Claude Agent SDK agents now resume the original conversation session, even across Bridge restarts; the session ID is saved to disk and loaded automatically on the next follow-up.
+- **Follow-up files for all providers** — follow-up messages consistently write a numbered input file (`<id>-followup-N.md`) to the task's `input/` folder and inject an output-file instruction into the prompt; stateless providers (Codex, Hermes, Gemini, Copilot) also receive the prior `agent_log.md` as context.
 
 ---
 
