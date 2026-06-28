@@ -49,12 +49,23 @@ function apiBaseUrl(): string {
     .replace(/\/ws\/bridge$/, '');
 }
 
+/** Returns true if the Linux CPU supports AVX2 (required for the non-baseline binary). */
+function linuxHasAvx2(): boolean {
+  try {
+    const cpuinfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
+    return cpuinfo.includes('avx2');
+  } catch {
+    return false;
+  }
+}
+
 /** Maps Bun/Node runtime platform+arch to the binary filename on GitHub releases. */
 function binaryName(): string {
   const { platform, arch } = process;
-  if (platform === 'win32')                   return 'ctrlnode.exe';
-  if (platform === 'darwin')                  return 'ctrlnode-darwin-arm64';
-  if (platform === 'linux' && arch === 'x64') return 'ctrlnode-linux-x64';
+  if (platform === 'win32')   return 'ctrlnode.exe';
+  if (platform === 'darwin')  return 'ctrlnode-darwin-arm64';
+  if (platform === 'linux' && arch === 'x64')
+    return linuxHasAvx2() ? 'ctrlnode-linux-x64' : 'ctrlnode-linux-x64-baseline';
   return '';
 }
 
@@ -188,17 +199,18 @@ export async function checkAndApplyUpdate(): Promise<void> {
   console.log(pad(line4));
   console.log(`└${bar}┘\n`);
 
-  if (!process.stdin.isTTY) {
-    logger.info('updater.non_interactive_skip', { latest: latest.version });
-    console.log('[updater] Running non-interactively — skipping update.\n');
-    return;
-  }
+  const interactive = process.stdin.isTTY;
 
-  process.stdout.write('> ');
-  const answer = readLine();
-  if (answer.toLowerCase() === 'n') {
-    console.log('[updater] Update skipped.\n');
-    return;
+  if (interactive) {
+    process.stdout.write('> ');
+    const answer = readLine();
+    if (answer.toLowerCase() === 'n') {
+      console.log('[updater] Update skipped.\n');
+      return;
+    }
+  } else {
+    logger.info('updater.non_interactive_auto_update', { latest: latest.version });
+    console.log('[updater] Running non-interactively — applying update automatically.\n');
   }
 
   const downloadUrl = latest.downloadUrlTemplate.replace('{binaryName}', bin);
