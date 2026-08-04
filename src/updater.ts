@@ -62,8 +62,8 @@ function linuxHasAvx2(): boolean {
 /** Maps Bun/Node runtime platform+arch to the binary filename on GitHub releases. */
 function binaryName(): string {
   const { platform, arch } = process;
-  if (platform === 'win32')   return 'ctrlnode.exe';
-  if (platform === 'darwin')  return 'ctrlnode-darwin-arm64';
+  if (platform === 'win32')  return 'ctrlnode.exe';
+  if (platform === 'darwin') return 'ctrlnode-darwin-arm64';
   if (platform === 'linux' && arch === 'x64')
     return linuxHasAvx2() ? 'ctrlnode-linux-x64' : 'ctrlnode-linux-x64-baseline';
   return '';

@@ -24,7 +24,7 @@ import { setupCodexAgentHome } from './codexAgentHome.js';
 import { ensureHermesProfile, deleteHermesProfile, writeHermesSoulMd, writeHermesProfileConfig } from './hermesProfile.js';
 
 /** Providers that support the generic sync_provider_agents flow. */
-export type SyncableProvider = 'cursor' | 'copilot' | 'codex' | 'gemini' | 'claude' | 'claude-sdk' | 'hermes';
+export type SyncableProvider = 'cursor' | 'copilot' | 'codex' | 'gemini' | 'claude' | 'claude-sdk' | 'hermes' | 'openrouter' | 'ollama';
 
 /**
  * Generic handler for sync_{provider}_agents messages.

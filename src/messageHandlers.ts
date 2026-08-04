@@ -122,6 +122,12 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'sync_hermes_agents':
       handleSyncProviderAgents('hermes', msg, ctx);
       break;
+    case 'sync_openrouter_agents':
+      handleSyncProviderAgents('openrouter', msg, ctx);
+      break;
+    case 'sync_ollama_agents':
+      handleSyncProviderAgents('ollama', msg, ctx);
+      break;
     case 'cancel_task':
       await handleCancelTask(msg, ctx);
       break;

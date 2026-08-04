@@ -143,3 +143,111 @@ describe('ClaudeCodeProvider.dispatchTask', () => {
     fs.rmSync(taskFolder, { recursive: true, force: true });
   });
 });
+
+describe('ClaudeCodeProvider.sendToSession stale-session recovery', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('retries without --resume when the CLI reports the session id is unknown', async () => {
+    const provider = new ClaudeCodeProvider();
+    const taskId = 'stale-session-task';
+    const taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+    const outputFolder = path.join(taskFolder, 'output');
+    fs.mkdirSync(outputFolder, { recursive: true });
+    fs.writeFileSync(path.join(outputFolder, 'agent_log.md'), '# Agent log\n\nDid step one already.', 'utf-8');
+
+    // Prime the in-memory session cache with a "stale" session id so sendToSession attempts --resume.
+    (provider as any).sessionCache.set(taskId, 'stale-session-id');
+
+    let callCount = 0;
+    const spawnSpy = spyOn(childProcess, 'spawn').mockImplementation(() => {
+      callCount += 1;
+      const isFirstCall = callCount === 1;
+      return {
+        stdout: { on: (_e: string, _cb: Function) => {} },
+        stderr: {
+          on: (event: string, cb: Function) => {
+            if (event === 'data' && isFirstCall) {
+              cb(Buffer.from('No conversation found with session ID: stale-session-id'));
+            }
+          },
+        },
+        stdin: { write: () => {}, end: () => {} },
+        on: (event: string, cb: Function) => { if (event === 'close') cb(isFirstCall ? 1 : 0); },
+      } as any;
+    });
+
+    try {
+      const onComplete = mock((_status: string, _reason?: string) => {});
+      await provider.sendToSession(
+        { agentId: 'local', taskId, message: 'please continue' } as any,
+        { onStream: () => {}, onMessage: () => {}, onComplete }
+      );
+
+      expect(callCount).toBe(2);
+
+      // First call used --resume with the stale id.
+      const firstArgs = spawnSpy.mock.calls[0][1] as string[];
+      expect(firstArgs).toContain('--resume');
+      expect(firstArgs[firstArgs.indexOf('--resume') + 1]).toBe('stale-session-id');
+
+      // Retry call must NOT pass --resume, and must include the prior agent_log.md content.
+      const secondArgs = spawnSpy.mock.calls[1][1] as string[];
+      expect(secondArgs).not.toContain('--resume');
+      const pIdx = secondArgs.indexOf('-p');
+      expect(secondArgs[pIdx + 1]).toContain('Did step one already.');
+      expect(secondArgs[pIdx + 1]).toContain('please continue');
+
+      // Final callback reflects the successful retry, not the original failure.
+      expect(onComplete).toHaveBeenCalledWith('completed');
+    } finally {
+      spawnSpy.mockRestore();
+      fs.rmSync(taskFolder, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ClaudeCodeProvider.sendToSession task folder resolution', () => {
+  let taskFolder: string;
+  let realTaskFolder: string;
+
+  afterEach(() => {
+    if (taskFolder) fs.rmSync(taskFolder, { recursive: true, force: true });
+    if (realTaskFolder) fs.rmSync(realTaskFolder, { recursive: true, force: true });
+  });
+
+  test('writes output under taskFolderName, not the disconnected tasks/{taskId} folder', async () => {
+    const provider = new ClaudeCodeProvider();
+    const taskId = 'code-real-folder-task';
+    const taskFolderName = 'tasks/proyecto-claude/07-09/bbf2d8db-cuanto';
+    realTaskFolder = path.join(CTRLNODE_ROOT, taskFolderName);
+    taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+
+    const spawnSpy = spyOn(childProcess, 'spawn').mockReturnValue({
+      stdout: { on: (_e: string, _cb: Function) => {} },
+      stderr: { on: (_e: string, _cb: Function) => {} },
+      stdin: { write: () => {}, end: () => {} },
+      on: (event: string, cb: Function) => { if (event === 'close') cb(0); },
+    } as any);
+
+    try {
+      await provider.sendToSession(
+        { agentId: 'local', taskId, message: 'please continue', taskFolderName } as any,
+        { onStream: () => {}, onMessage: () => {}, onComplete: () => {} }
+      );
+
+      expect(fs.existsSync(path.join(realTaskFolder, 'output'))).toBe(true);
+      expect(fs.existsSync(path.join(taskFolder, 'output'))).toBe(false);
+
+      const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+      const addDirIdx = spawnArgs.indexOf('--add-dir');
+      expect(addDirIdx).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs[addDirIdx + 1]).toBe(realTaskFolder);
+    } finally {
+      spawnSpy.mockRestore();
+    }
+  });
+});

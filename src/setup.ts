@@ -76,6 +76,7 @@ export async function runSetup(): Promise<void> {
     PAIRING_TOKEN: token,
     ...(providerKeys.cursorApiKey ? { CURSOR_API_KEY: providerKeys.cursorApiKey } : {}),
     ...(providerKeys.anthropicApiKey ? { ANTHROPIC_API_KEY: providerKeys.anthropicApiKey } : {}),
+    ...(providerKeys.openrouterApiKey ? { OPENROUTER_API_KEY: providerKeys.openrouterApiKey } : {}),
   });
 
   // ── Persist BASE_PATH in user environment ─────────────────────────────────────
@@ -88,6 +89,7 @@ export async function runSetup(): Promise<void> {
   console.log(`BASE_PATH set to: ${workspace}`);
   if (providerKeys.cursorApiKey) console.log('  CURSOR_API_KEY: saved');
   if (providerKeys.anthropicApiKey) console.log('  ANTHROPIC_API_KEY: saved');
+  if (providerKeys.openrouterApiKey) console.log('  OPENROUTER_API_KEY: saved');
   console.log('');
   console.log('To start the bridge, either:');
   console.log('  1. Close this terminal and open a new one, then run:');

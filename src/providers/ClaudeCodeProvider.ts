@@ -6,8 +6,8 @@ import { AgentSummary } from '../types.js';
 import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { createInactivityTimer } from './providerFileUtils.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn, resolveTaskPaths } from './repoDispatchContext.js';
+import { createInactivityTimer, isStaleSessionError, buildStaleSessionRecoveryPrompt, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 
 
 /**
@@ -122,21 +122,24 @@ export class ClaudeCodeProvider implements IProvider {
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
-    const { taskId, message, agentId } = params;
+    const { taskId, message, agentId, taskFolderName } = params;
     const prevSessionId = this.sessionCache.get(taskId);
     const agentInfo = discoveredAgents[agentId];
     const agentModel = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
 
-    const taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+    // Output/log/CLAUDE.md must live in the task's REAL folder (same one the initial
+    // run used and the one prepareFollowupFiles() writes the followup input file
+    // into), not the taskId-keyed folder.
+    const { taskFolder } = resolveTaskPaths(taskFolderName, taskId);
     const outputFolder = path.join(taskFolder, 'output');
     fs.mkdirSync(outputFolder, { recursive: true });
 
-    const providerTasksRoot = resolveProjectHome(undefined);
+    const providerTasksRoot = resolveProjectHome(taskFolderName);
     const taskSlug = path.basename(taskFolder);
     const relativeOutputFolder = path.relative(providerTasksRoot, outputFolder).replace(/\\/g, '/');
     writeAgentsMd(taskFolder, agentInfo?.role, agentInfo?.description, relativeOutputFolder, taskSlug, taskId);
     fs.mkdirSync(providerTasksRoot, { recursive: true });
-    await this._spawnClaude({ taskId, cwd: providerTasksRoot, prompt: message, resumeSessionId: prevSessionId, model: agentModel, outputFolder, callbacks });
+    await this._spawnClaude({ taskId, cwd: providerTasksRoot, prompt: message, resumeSessionId: prevSessionId, addDir: taskFolder, model: agentModel, outputFolder, callbacks });
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
@@ -209,11 +212,19 @@ export class ClaudeCodeProvider implements IProvider {
     model?: string;
     outputFolder?: string;
     callbacks: TaskCallbacks;
+    /** Internal: set on the retry attempt after a stale-session recovery, to prevent infinite retry loops. */
+    isSessionRecoveryRetry?: boolean;
   }): Promise<void> {
-    const { taskId, cwd, prompt, stdinContent, addDir, resumeSessionId, model, outputFolder, callbacks } = opts;
+    const { taskId, cwd, prompt, stdinContent, addDir, resumeSessionId, model, outputFolder, callbacks, isSessionRecoveryRetry } = opts;
 
-    // Prepare agent_log.md path — messages are appended as they stream in
-    const agentLogPath = outputFolder ? path.join(outputFolder, 'agent_log.md') : null;
+    // Prepare this execution's agent log path — messages are appended as they stream
+    // in. Named agent_log.md for the initial run or agent_log.followup-N.md for
+    // followup N (see resolveCurrentAgentLogFileName), so each execution keeps its
+    // own log instead of every followup overwriting the initial run's log.
+    const taskFolderAbsForLog = outputFolder ? path.dirname(outputFolder) : null;
+    const agentLogPath = outputFolder
+      ? path.join(outputFolder, resolveCurrentAgentLogFileName(taskFolderAbsForLog!))
+      : null;
     if (agentLogPath && !fs.existsSync(agentLogPath)) {
       fs.writeFileSync(agentLogPath, `# Agent log\n\n`, 'utf-8');
     }
@@ -414,15 +425,26 @@ export class ClaudeCodeProvider implements IProvider {
 
         if (timer.fired) {
           callbacks.onComplete('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
+          resolve();
         } else if (code === 0) {
           callbacks.onComplete('completed');
+          resolve();
+        } else if (resumeSessionId && !isSessionRecoveryRetry && isStaleSessionError(stderrBuf)) {
+          logger.warn('claude_provider.session_recovery', { taskId, staleSessionId: resumeSessionId });
+          this.sessionCache.delete(taskId);
+          const recoveryPrompt = buildStaleSessionRecoveryPrompt(taskFolderAbsForLog ?? '', prompt);
+          this._spawnClaude({
+            ...opts,
+            prompt: recoveryPrompt,
+            resumeSessionId: undefined,
+            isSessionRecoveryRetry: true,
+          }).then(resolve);
         } else {
           const reason = stderrBuf.slice(0, 512) || `exit code ${code}`;
           logger.warn('claude_provider.exit_nonzero', { taskId, code, stderr: stderrBuf.slice(0, 512) });
           callbacks.onComplete('failed', reason);
+          resolve();
         }
-
-        resolve();
       });
 
       proc.on('error', (err) => {

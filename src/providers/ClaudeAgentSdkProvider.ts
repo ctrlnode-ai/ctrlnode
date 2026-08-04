@@ -33,10 +33,11 @@ import {
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs, createInactivityTimer } from './providerFileUtils.js';
+import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs, createInactivityTimer, isStaleSessionError, buildStaleSessionRecoveryPrompt, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 import {
   appendTaskLogToSystemParts,
   resolveRepoDispatchSpawn,
+  resolveTaskPaths,
 } from './repoDispatchContext.js';
 
 
@@ -204,8 +205,12 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     const { taskId, message, agentId, taskFolderName } = params;
-    const taskFolderForSession = path.join(CTRLNODE_ROOT, 'tasks', taskId);
-    const sessionFile = path.join(taskFolderForSession, 'session_id');
+
+    // session_id persistence is intentionally keyed by taskId alone (stable location
+    // regardless of taskFolderName, which isn't always available at every resume call
+    // site) — this stays fixed even though output/log/CLAUDE.md below now resolve to
+    // the real task folder.
+    const sessionFile = path.join(CTRLNODE_ROOT, 'tasks', taskId, 'session_id');
     const prevSessionId = this.sessionCache.get(taskId)
       ?? (fs.existsSync(sessionFile) ? fs.readFileSync(sessionFile, 'utf-8').trim() : undefined);
     if (prevSessionId) {
@@ -216,7 +221,10 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const agentInfo = discoveredAgents[agentId];
     const agentModel = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
 
-    const taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+    // Output/log/CLAUDE.md must live in the task's REAL folder (same one the initial
+    // run used and the one prepareFollowupFiles() writes the followup input file
+    // into), not the taskId-keyed folder used only for session_id.
+    const { taskFolder } = resolveTaskPaths(taskFolderName, taskId);
     const outputFolder = path.join(taskFolder, 'output');
     fs.mkdirSync(outputFolder, { recursive: true });
     writeAgentsMd(taskFolder, agentInfo?.role, agentInfo?.description);
@@ -241,6 +249,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     await this._runQuery({
       taskId,
+      taskFolderName: taskFolderName ?? undefined,
       cwd: providerTasksRoot,
       prompt: sessionPrompt,
       resumeSessionId: prevSessionId,
@@ -303,6 +312,8 @@ export class ClaudeAgentSdkProvider implements IProvider {
     persistSession?: boolean;
     outputFolder?: string;
     callbacks: TaskCallbacks;
+    /** Internal: set on the retry attempt after a stale-session recovery, to prevent infinite retry loops. */
+    isSessionRecoveryRetry?: boolean;
   }): Promise<void> {
     const {
       taskId,
@@ -316,10 +327,18 @@ export class ClaudeAgentSdkProvider implements IProvider {
       persistSession,
       outputFolder,
       callbacks,
+      isSessionRecoveryRetry,
     } = opts;
 
-    // Prepare agent_log.md — stream assistant messages into it as they arrive.
-    const agentLogPath = outputFolder ? path.join(outputFolder, 'agent_log.md') : null;
+    // Prepare this execution's agent log — stream assistant messages into it as they
+    // arrive. Named agent_log.md for the initial run or agent_log.followup-N.md for
+    // followup N (see resolveCurrentAgentLogFileName), so each execution keeps its own
+    // log instead of a followup's live stream overwriting the initial run's log while
+    // writeTaskOutputs (at the end) writes to a *different*, correctly-named file.
+    const taskFolderAbsForLog = outputFolder ? path.dirname(outputFolder) : null;
+    const agentLogPath = outputFolder
+      ? path.join(outputFolder, resolveCurrentAgentLogFileName(taskFolderAbsForLog!))
+      : null;
     if (agentLogPath && !fs.existsSync(agentLogPath)) {
       fs.writeFileSync(agentLogPath, `# Agent log\n\n`, 'utf-8');
     }
@@ -470,15 +489,43 @@ export class ClaudeAgentSdkProvider implements IProvider {
         || (err?.message ?? '').toLowerCase().includes('aborted');
       if (isAbort) {
         callbacks.onComplete('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
-      } else {
-        logger.error('claude_sdk_provider.query_error', { taskId, error: err?.message });
-        callbacks.onComplete('failed', err?.message ?? 'Unknown error');
+        return;
       }
+      if (resumeSessionId && !isSessionRecoveryRetry && isStaleSessionError(err?.message ?? '')) {
+        logger.warn('claude_sdk_provider.session_recovery', { taskId, staleSessionId: resumeSessionId });
+        this.sessionCache.delete(taskId);
+        await this._runQuery({
+          ...opts,
+          prompt: buildStaleSessionRecoveryPrompt(taskFolderAbsForLog ?? '', prompt),
+          resumeSessionId: undefined,
+          isSessionRecoveryRetry: true,
+        });
+        return;
+      }
+      logger.error('claude_sdk_provider.query_error', { taskId, error: err?.message });
+      callbacks.onComplete('failed', err?.message ?? 'Unknown error');
       return;
     }
 
     timer.clear();
     this._activeAborts.delete(taskId);
+
+    if (
+      completedStatus === 'failed'
+      && resumeSessionId
+      && !isSessionRecoveryRetry
+      && isStaleSessionError(completedReason ?? '')
+    ) {
+      logger.warn('claude_sdk_provider.session_recovery', { taskId, staleSessionId: resumeSessionId });
+      this.sessionCache.delete(taskId);
+      await this._runQuery({
+        ...opts,
+        prompt: buildStaleSessionRecoveryPrompt(taskFolderAbsForLog ?? '', prompt),
+        resumeSessionId: undefined,
+        isSessionRecoveryRetry: true,
+      });
+      return;
+    }
 
     if (sessionId && taskId) {
       this.sessionCache.set(taskId, sessionId);

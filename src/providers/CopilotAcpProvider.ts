@@ -11,7 +11,7 @@ import {
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { detectStatusTag, writeOutputFile, writeAgentLog, createInactivityTimer, resolveSecurePath } from './providerFileUtils.js';
+import { detectStatusTag, writeOutputFile, writeAgentLog, createInactivityTimer, resolveSecurePath, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 import { getKnownModels } from '../modelManifest.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
 import { buildAcpSpawnCommand, createAcpStream, initAcpConnection } from './acpCommon.js';
@@ -255,7 +255,8 @@ export class CopilotAcpProvider implements IProvider {
         }
         // Always write the full agent log so the conversation is persisted.
         if (taskFolderName && accumulatedText.trim()) {
-          writeAgentLog(taskId, taskFolder, accumulatedText, 'copilot_acp');
+          const logFileName = resolveCurrentAgentLogFileName(taskFolder);
+          writeAgentLog(taskId, taskFolder, accumulatedText, 'copilot_acp', logFileName);
         }
         // onMessage is called per-chunk during streaming; skip final bulk send to avoid duplicates.
         const completion = detectStatusTag(accumulatedText);

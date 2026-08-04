@@ -8,6 +8,7 @@ import fs from 'fs';
 export type ProviderApiKeys = {
   cursorApiKey?: string;
   anthropicApiKey?: string;
+  openrouterApiKey?: string;
 };
 
 /** Merge vars into an existing KEY=value .env file (create or update keys). */
@@ -48,9 +49,16 @@ export async function promptProviderApiKeys(
     anthropicApiKey = await ask('ANTHROPIC_API_KEY: ');
   }
 
+  let openrouterApiKey = '';
+  const useOpenRouter = await ask('Configure OpenRouter API key (OPENROUTER_API_KEY)? (y/N): ');
+  if (/^y(es)?$/i.test(useOpenRouter)) {
+    openrouterApiKey = await ask('OPENROUTER_API_KEY: ');
+  }
+
   console.log('');
   return {
     ...(cursorApiKey ? { cursorApiKey } : {}),
     ...(anthropicApiKey ? { anthropicApiKey } : {}),
+    ...(openrouterApiKey ? { openrouterApiKey } : {}),
   };
 }

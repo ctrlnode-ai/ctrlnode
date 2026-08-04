@@ -99,9 +99,23 @@ export const WATCHER_POLL_INTERVAL = parseInt(process.env.WATCHER_POLL_INTERVAL 
 // Internal constant — all providers are always loaded.
 // The server drives agent→provider routing via sync_*_agents messages.
 
-export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes'];
+export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes', 'ollama'];
 
 export let PROVIDER = PROVIDERS[0];
+
+/**
+ * Narrows PROVIDERS down to the intersection with `allowed` (never adds anything back
+ * that credential/config gating already removed above). Called from index.ts after
+ * fetching the canonical provider list from GET /api/agent-types, so a Bridge build
+ * never tries to construct a provider name the backend doesn't currently recognize
+ * (e.g. a renamed/removed provider on an old Bridge build talking to a newer backend,
+ * or vice versa). If that fetch fails, this is simply never called and every provider
+ * this Bridge build knows about — and is credentialed for — stays active.
+ */
+export function restrictProvidersTo(allowed: Set<string>): void {
+  PROVIDERS = PROVIDERS.filter(p => allowed.has(p));
+  PROVIDER = PROVIDERS[0];
+}
 
 // ── Claude Code provider ──────────────────────────────────────────────────────
 
@@ -173,6 +187,57 @@ export const CLAUDE_SDK_EXECUTABLE = (() => {
 export const HERMES_HOME = process.env.HERMES_HOME || '';
 // HERMES_USE_ACP=false forces hermes chat -Q -q (CLI) instead of hermes acp
 
+// ── OpenRouter provider ────────────────────────────────────────────────────────
+// Provider name: "openrouter" — REST API directa (sin SDK/subprocess), pay-as-you-go.
+// BYOK local: la clave la trae el propio usuario (ctrlnode --setup o .env a mano),
+// igual que CURSOR_API_KEY / ANTHROPIC_API_KEY. Sin backend, sin provisioning central.
+
+export let OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+export const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api'; // sin /v1 — ver nota en providerFileUtils
+export const OPENROUTER_DEFAULT_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || 'anthropic/claude-sonnet-4.5';
+export const OPENROUTER_ALLOWED_MODELS = (process.env.OPENROUTER_ALLOWED_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+export const OPENROUTER_MAX_TURNS = parseInt(process.env.OPENROUTER_MAX_TURNS || '20', 10);
+export const OPENROUTER_MAX_TOKENS_PER_TURN = parseInt(process.env.OPENROUTER_MAX_TOKENS_PER_TURN || '8000', 10);
+
+// ── Ollama provider ────────────────────────────────────────────────────────────
+// Provider name: "ollama" — 100% local, no API key. Always registered, like every
+// other provider — same principle as the base PROVIDERS list above: the Bridge loads
+// all providers unconditionally, and which one actually handles a task is decided
+// per-agent (by that agent's configured provider/type), not by a Bridge-wide flag.
+// If Ollama isn't installed/running on this machine, isAvailable()/dispatch simply
+// report that clearly instead of silently succeeding — no need to gate registration.
+/**
+ * Normalizes a raw OLLAMA_HOST env value into a fetch()-able base URL.
+ *
+ * OLLAMA_HOST is commonly set system-wide as a bind address for the Ollama SERVER
+ * (e.g. "0.0.0.0" or "0.0.0.0:11434", meaning "listen on all interfaces") rather than
+ * a client-facing URL. Used as-is, fetch() throws "URL is invalid" for a bare host —
+ * or, for "0.0.0.0" specifically, that's a valid-looking URL that silently never
+ * connects (0.0.0.0 isn't a real client-reachable address). Both cases previously
+ * made isAvailable() return false forever with no visible error (the fetch failure
+ * was swallowed by isAvailable()'s catch block), even with Ollama actually running.
+ */
+export function normalizeOllamaHost(raw: string | undefined): string {
+  if (!raw || !raw.trim()) return 'http://localhost:11434';
+  let value = raw.trim();
+  if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
+  try {
+    const url = new URL(value);
+    if (url.hostname === '0.0.0.0') url.hostname = 'localhost';
+    if (!url.port) url.port = '11434';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return 'http://localhost:11434';
+  }
+}
+
+export const OLLAMA_HOST = normalizeOllamaHost(process.env.OLLAMA_HOST);
+export const OLLAMA_DEFAULT_MODEL = process.env.OLLAMA_DEFAULT_MODEL || '';
+export const OLLAMA_ALLOWED_MODELS = (process.env.OLLAMA_ALLOWED_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+export const OLLAMA_MAX_TURNS = parseInt(process.env.OLLAMA_MAX_TURNS || '20', 10);
+export const OLLAMA_NUM_CTX = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10); // critical — Ollama truncates context silently otherwise
+export const OLLAMA_TASK_TIMEOUT_MINUTES = parseInt(process.env.OLLAMA_TASK_TIMEOUT_MINUTES || '25', 10); // more generous than TASK_TIMEOUT_MINUTES — CPU-only inference can be slow
+
 // ── Copilot ACP provider ──────────────────────────────────────────────────────
 
 
@@ -222,8 +287,9 @@ if (!fs.existsSync(agentsRoot)) {
 // process.env may have been mutated by the TTY block above; refresh exported lets.
 ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || ANTHROPIC_API_KEY;
 CURSOR_API_KEY         = process.env.CURSOR_API_KEY         || CURSOR_API_KEY;
+OPENROUTER_API_KEY     = process.env.OPENROUTER_API_KEY     || OPENROUTER_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
-BASE_PATH = process.env.BASE_PATH || BASE_PATH;
+BASE_PATH              = process.env.BASE_PATH              || BASE_PATH;
 
 export let CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
 
@@ -256,11 +322,12 @@ export const MAX_INLINE_PDF_BYTES = 15 * 1024 * 1024;
 export const DOTENV_PATH: string | null = _dotenvPath;
 
 // ── Refresh exported vars from process.env (loaded from .env or shell) ────────
-ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY    || ANTHROPIC_API_KEY;
-CURSOR_API_KEY       = process.env.CURSOR_API_KEY       || CURSOR_API_KEY;
+ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || ANTHROPIC_API_KEY;
+CURSOR_API_KEY         = process.env.CURSOR_API_KEY         || CURSOR_API_KEY;
+OPENROUTER_API_KEY     = process.env.OPENROUTER_API_KEY     || OPENROUTER_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
-BASE_PATH     = process.env.BASE_PATH || BASE_PATH;
-CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
+BASE_PATH              = process.env.BASE_PATH              || BASE_PATH;
+CTRLNODE_ROOT          = path.join(BASE_PATH, '.ctrlnode');
 
 
 if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
@@ -318,6 +385,11 @@ if (!CURSOR_API_KEY) {
   logger.info('cursor_api_key_detected', { mode: 'api-key' });
 }
 
+if (!OPENROUTER_API_KEY) {
+  logger.info('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
+} else {
+  logger.info('openrouter_api_key_detected', { mode: 'api-key' });
+}
 
 // ── Resolve OPENCLAW_CONFIG ───────────────────────────────────────────────────
 
@@ -345,6 +417,15 @@ if (!fs.existsSync(OPENCLAW_CONFIG)) {
   PROVIDERS = PROVIDERS.filter(p => p !== 'openclaw');
   PROVIDER = PROVIDERS[0];
 }
+
+// Auto-enable OpenRouter provider if API key is set
+if (OPENROUTER_API_KEY) {
+  PROVIDERS.push('openrouter');
+}
+
+// Ollama needs no opt-in flag or key — it's already in the base PROVIDERS list above
+// (see the comment there). Nothing to do here; kept as a marker for where the old
+// OLLAMA_ENABLED gate used to live, in case a future provider needs one instead.
 
 export const ctrlnodePath = path.join(path.dirname(OPENCLAW_CONFIG || path.join(os.homedir(), '.openclaw', 'openclaw.json')), 'ctrlnode');
 
