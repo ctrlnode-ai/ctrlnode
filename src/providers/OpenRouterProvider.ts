@@ -6,7 +6,7 @@
  * full design rationale (cost accounting, 402 handling, allowlist).
  */
 import fs from 'fs';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { runToolLoop } from './openAiCompatToolLoop.js';
 import {
@@ -90,6 +90,29 @@ export class OpenRouterProvider implements IProvider {
     const agentInfo = discoveredAgents[params.agentId];
     const { taskFolder } = resolveTaskPaths(params.taskFolderName, params.taskId);
     await this._run(params.taskId, params.message, callbacks, agentInfo?.model, params.taskFolderName, taskFolder);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const model = this._resolveModel(discoveredAgents[params.agentId]?.model);
+    if (!model) throw new Error('GRAPH_GENERATION_UNSUPPORTED_MODEL');
+
+    const response = await fetch(`${OPENROUTER_API_BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: params.prompt }],
+        max_tokens: OPENROUTER_MAX_TOKENS_PER_TURN,
+      }),
+      signal: AbortSignal.timeout(params.timeoutMs),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`GRAPH_GENERATION_PROVIDER_ERROR: OpenRouter HTTP ${response.status}: ${body.slice(0, 300)}`);
+    }
+    const content = (await response.json() as any).choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+    return content.trim();
   }
 
   private async _run(

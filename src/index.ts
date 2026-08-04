@@ -6,12 +6,15 @@
 // BUILD_TIME is injected at compile time via --define BUILD_TIME="..."
 declare const BUILD_TIME: string;
 const _buildTime = typeof BUILD_TIME !== 'undefined' ? BUILD_TIME : 'dev';
+const _isLoginCommand = (await import('./cliMode.js')).isLoginCommand(process.argv);
 
 // config.ts MUST be the first import — it validates env vars and exits
 // with a user-friendly message if required files are missing.
 const { PROVIDERS, ensurePairingToken, BRIDGE_VERSION, restrictProvidersTo } = await import('./config.js');
 
-console.log(`\nCTRLNODE Bridge ${BRIDGE_VERSION}  built ${_buildTime}\n`);
+if (!_isLoginCommand) {
+  console.log(`\nCTRLNODE Bridge ${BRIDGE_VERSION}  built ${_buildTime}\n`);
+}
 
 // --setup: run interactive wizard and exit before loading anything else.
 // Must be checked before any other imports so config.ts side-effects don't run.
@@ -23,7 +26,7 @@ if (process.argv.includes('--setup')) {
 
 // login / --login: device-authorization flow to obtain PAIRING_TOKEN without
 // copy-pasting it from Settings → Bridge. See src/login.ts.
-if (process.argv.includes('login') || process.argv.includes('--login')) {
+if (_isLoginCommand) {
   const { runLogin, defaultEnvFilePath } = await import('./login.js');
   try {
     await runLogin(defaultEnvFilePath());

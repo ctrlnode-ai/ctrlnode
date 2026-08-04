@@ -2,7 +2,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -14,7 +14,7 @@ import { logger } from '../logger.js';
 import { detectStatusTag, writeOutputFile, writeAgentLog, createInactivityTimer, resolveSecurePath, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 import { getKnownModels } from '../modelManifest.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { buildAcpSpawnCommand, createAcpStream, initAcpConnection } from './acpCommon.js';
+import { buildAcpSpawnCommand, createAcpStream, initAcpConnection, runAcpStructuredPlan } from './acpCommon.js';
 
 export class CopilotAcpProvider implements IProvider {
   readonly providerName = 'copilot';
@@ -55,6 +55,28 @@ export class CopilotAcpProvider implements IProvider {
       ? `${agentInfo.description}\n\n---\n\n${params.message}`
       : params.message;
     await this._runAcp(params.taskId, effectivePrompt, callbacks);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const { cmd, args } = buildAcpSpawnCommand('copilot', ['--acp', '--stdio']);
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+
+    logger.info('copilot_acp.graph_generation_start', { agentId: params.agentId, cwd });
+    try {
+      const result = await runAcpStructuredPlan({
+        providerLog: 'copilot_acp',
+        cmd,
+        args,
+        cwd,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+      });
+      logger.info('copilot_acp.graph_generation_completed', { agentId: params.agentId, responseLength: result.length });
+      return result;
+    } catch (error: any) {
+      logger.warn('copilot_acp.graph_generation_failed', { agentId: params.agentId, error: error?.message });
+      throw error;
+    }
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {

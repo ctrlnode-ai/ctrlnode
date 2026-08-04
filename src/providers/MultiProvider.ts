@@ -11,7 +11,7 @@
  */
 
 import { logger } from '../logger.js';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { discoveredAgents, normalizeAgentId } from '../agentDiscovery.js';
 
@@ -60,6 +60,14 @@ export class MultiProvider implements IProvider {
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     const owner = this.resolveOwner(params.agentId);
     return owner.sendToSession(params, callbacks);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const owner = this.resolveOwner(params.agentId);
+    if (!owner.generateStructuredPlan) {
+      throw new Error('GRAPH_GENERATION_UNSUPPORTED_PROVIDER');
+    }
+    return owner.generateStructuredPlan(params);
   }
 
   // ── Tool invocation ───────────────────────────────────────────────────────────

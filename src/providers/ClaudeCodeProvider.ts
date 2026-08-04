@@ -1,13 +1,14 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn, resolveTaskPaths } from './repoDispatchContext.js';
 import { createInactivityTimer, isStaleSessionError, buildStaleSessionRecoveryPrompt, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
+import { ClaudePlannerTextCollector } from '../graphBlueprintPlanner.js';
 
 
 /**
@@ -140,6 +141,66 @@ export class ClaudeCodeProvider implements IProvider {
     writeAgentsMd(taskFolder, agentInfo?.role, agentInfo?.description, relativeOutputFolder, taskSlug, taskId);
     fs.mkdirSync(providerTasksRoot, { recursive: true });
     await this._spawnClaude({ taskId, cwd: providerTasksRoot, prompt: message, resumeSessionId: prevSessionId, addDir: taskFolder, model: agentModel, outputFolder, callbacks });
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const model = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const args = [
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--allowedTools', '',
+      '--max-turns', '2',
+      '--no-session-persistence',
+      ...(model ? ['--model', model] : []),
+      '-p', params.prompt,
+    ];
+    const [spawnBin, spawnArgs] = process.platform === 'win32'
+      ? (['cmd.exe', ['/c', 'claude.cmd', ...args]] as const)
+      : (['claude', args] as const);
+
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn(spawnBin, [...spawnArgs], {
+        cwd,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+      const collector = new ClaudePlannerTextCollector();
+      let stderr = '';
+      let lineBuffer = '';
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM');
+        reject(new Error('GRAPH_GENERATION_TIMEOUT'));
+      }, params.timeoutMs);
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        lineBuffer += chunk.toString();
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() ?? '';
+        for (const line of lines) {
+          try { collector.add(JSON.parse(line)); } catch { /* ignore non-protocol output */ }
+        }
+      });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      proc.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      proc.on('close', (code) => {
+        clearTimeout(timeout);
+        const result = collector.text.trim();
+        if (code !== 0) {
+          reject(new Error(stderr.trim().slice(0, 512) || `GRAPH_GENERATION_PROVIDER_EXIT_${code}`));
+        } else if (!result) {
+          reject(new Error('GRAPH_GENERATION_EMPTY_RESPONSE'));
+        } else {
+          resolve(result);
+        }
+      });
+    });
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {

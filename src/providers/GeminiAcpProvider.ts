@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -13,7 +13,7 @@ import {
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection } from './acpCommon.js';
+import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection, runAcpStructuredPlan } from './acpCommon.js';
 import { detectStatusTag, writeTaskOutputs, createInactivityTimer, resolveSecurePath } from './providerFileUtils.js';
 import { getKnownModels } from '../modelManifest.js';
 
@@ -51,6 +51,32 @@ export class GeminiAcpProvider implements IProvider {
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     await this._runAcp(params.taskId, params.message, CTRLNODE_ROOT, callbacks, undefined, params.agentId);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const registeredModel = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
+    const acpArgs = ['--acp', '--approval-mode', 'yolo'];
+    if (registeredModel) acpArgs.push('--model', registeredModel);
+    const { cmd, args } = buildAcpSpawnCommand('gemini', acpArgs);
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+
+    logger.info('gemini_acp.graph_generation_start', { agentId: params.agentId, cwd, model: registeredModel ?? '(default)' });
+    try {
+      const result = await runAcpStructuredPlan({
+        providerLog: 'gemini_acp',
+        cmd,
+        args,
+        cwd,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+      });
+      logger.info('gemini_acp.graph_generation_completed', { agentId: params.agentId, responseLength: result.length });
+      return result;
+    } catch (error: any) {
+      logger.warn('gemini_acp.graph_generation_failed', { agentId: params.agentId, error: error?.message });
+      throw error;
+    }
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {

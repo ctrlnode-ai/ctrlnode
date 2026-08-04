@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
@@ -39,6 +39,7 @@ import {
   resolveRepoDispatchSpawn,
   resolveTaskPaths,
 } from './repoDispatchContext.js';
+import { ClaudePlannerTextCollector } from '../graphBlueprintPlanner.js';
 
 
 /**
@@ -260,6 +261,49 @@ export class ClaudeAgentSdkProvider implements IProvider {
       outputFolder,
       callbacks,
     });
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const model = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), params.timeoutMs);
+    const options: Options = {
+      cwd,
+      allowedTools: [],
+      permissionMode: 'dontAsk' as any,
+      maxTurns: 2,
+      persistSession: false,
+      includePartialMessages: true,
+      abortController,
+      ...(model ? { model } : {}),
+      ...(CLAUDE_SDK_EXECUTABLE ? { pathToClaudeCodeExecutable: CLAUDE_SDK_EXECUTABLE } : {}),
+    };
+    const collector = new ClaudePlannerTextCollector();
+
+    try {
+      for await (const message of query({ prompt: params.prompt, options })) {
+        collector.add(message);
+        if ((message as any).type === 'result') {
+          const result = message as any;
+          if (result.subtype !== 'success') {
+            throw new Error(result.subtype === 'max_turns'
+              ? 'GRAPH_GENERATION_TIMEOUT'
+              : (result.error ?? 'GRAPH_GENERATION_PROVIDER_ERROR'));
+          }
+        }
+      }
+    } catch (error: any) {
+      if (error?.name === 'AbortError') throw new Error('GRAPH_GENERATION_TIMEOUT');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const result = collector.text.trim();
+    if (!result) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+    return result;
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {

@@ -11,7 +11,7 @@ import { Codex } from '@openai/codex-sdk';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -52,6 +52,48 @@ async function fetchOpenAiModels(): Promise<string[]> {
   return fetchOpenAiCompatibleModels(apiKey ?? '');
 }
 
+const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'description', 'topology', 'templateFamily', 'schedule', 'nodes'],
+  properties: {
+    name: { type: 'string' },
+    description: { type: 'string' },
+    topology: { type: 'string', enum: ['single', 'linear', 'fan_out_fan_in', 'dag'] },
+    templateFamily: { type: 'string', enum: ['blank', 'research_report', 'linear', 'parallel', 'custom'] },
+    schedule: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'custom'] },
+        time: { type: 'string' },
+        days: { type: 'array', items: { type: 'integer' } },
+        hours: { type: 'array', items: { type: 'integer' } },
+        timezone: { type: 'string' },
+        cron: { type: 'string' },
+      },
+    },
+    nodes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'label', 'instructions', 'taskMode', 'focusFiles', 'outputFolder', 'dependsOn'],
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          instructions: { type: 'string' },
+          taskMode: { type: 'string', enum: ['output', 'repo'] },
+          focusFiles: { type: 'array', items: { type: 'string' } },
+          outputFolder: { type: 'string' },
+          dependsOn: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+} as const;
+
 export class CodexSdkProvider implements IProvider {
   readonly providerName = 'codex';
   private readonly _cancelFlags = new Map<string, boolean>();
@@ -90,6 +132,64 @@ export class CodexSdkProvider implements IProvider {
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     const agentInfo = discoveredAgents[params.agentId];
     await this._run(params.taskId, params.message, callbacks, params.agentId, undefined, agentInfo?.description, agentInfo?.model);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const agentHome = getCodexAgentHome(params.agentId);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
+    const modelFromConfig = codexHomeOverride ? readModelFromConfigToml(codexHomeOverride) : undefined;
+    const model = (agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined)
+      ?? modelFromConfig
+      ?? process.env.CODEX_DEFAULT_MODEL
+      ?? undefined;
+    const codexEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      ...(process.env.CODEX_API_KEY ? { OPENAI_API_KEY: process.env.CODEX_API_KEY } : {}),
+      ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+    };
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), params.timeoutMs);
+
+    logger.info('codex_sdk.graph_generation_start', {
+      agentId: params.agentId,
+      cwd,
+      model: model ?? '(default)',
+      timeoutMs: params.timeoutMs,
+    });
+
+    try {
+      const codex = new Codex({
+        ...(process.env.CODEX_BIN_PATH ? { codexPathOverride: process.env.CODEX_BIN_PATH } : {}),
+        env: codexEnv,
+      });
+      const thread = codex.startThread({
+        workingDirectory: cwd,
+        skipGitRepoCheck: true,
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        ...(model ? { model } : {}),
+      });
+      const turn = await thread.run(params.prompt, {
+        outputSchema: GRAPH_BLUEPRINT_OUTPUT_SCHEMA,
+        signal: abortController.signal,
+      });
+      const result = turn.finalResponse.trim();
+      if (!result) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+      logger.info('codex_sdk.graph_generation_completed', {
+        agentId: params.agentId,
+        responseLength: result.length,
+      });
+      return result;
+    } catch (error: any) {
+      if (abortController.signal.aborted || error?.name === 'AbortError') {
+        throw new Error('GRAPH_GENERATION_TIMEOUT');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {

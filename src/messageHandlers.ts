@@ -83,6 +83,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'dispatch_task':
       await handleIntentAction(msg, ctx, 'dispatch_task');
       break;
+    case 'generate_graph_blueprint':
+      await handleIntentAction(msg, ctx, 'generate_graph_blueprint');
+      break;
     case 'agent_command':
       await handleIntentAction(msg, ctx, 'agent_command');
       break;

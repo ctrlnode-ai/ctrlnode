@@ -6,7 +6,7 @@
  * rationale, especially the num_ctx gotcha (§5) and hardware/model guidance.
  */
 import fs from 'fs';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { runToolLoop } from './openAiCompatToolLoop.js';
 import {
@@ -95,6 +95,30 @@ export class OllamaProvider implements IProvider {
     const agentInfo = discoveredAgents[params.agentId];
     const { taskFolder } = resolveTaskPaths(params.taskFolderName, params.taskId);
     await this._run(params.taskId, params.message, callbacks, agentInfo?.model, params.taskFolderName, taskFolder);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const model = this._resolveModel(discoveredAgents[params.agentId]?.model);
+    if (!model) throw new Error('GRAPH_GENERATION_UNSUPPORTED_MODEL');
+
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: params.prompt }],
+        stream: false,
+        options: { num_ctx: OLLAMA_NUM_CTX },
+      }),
+      signal: AbortSignal.timeout(params.timeoutMs),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`GRAPH_GENERATION_PROVIDER_ERROR: Ollama HTTP ${response.status}: ${body.slice(0, 300)}`);
+    }
+    const content = (await response.json() as any).message?.content;
+    if (typeof content !== 'string' || !content.trim()) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+    return content.trim();
   }
 
   private async _run(

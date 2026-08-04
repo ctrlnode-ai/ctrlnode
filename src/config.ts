@@ -8,6 +8,12 @@ import os from 'os';
 import fs from 'fs';
 import { logger } from './logger.js';
 import { resolveOpenClawConfigPath } from './configResolution.js';
+import { isLoginCommand } from './cliMode.js';
+
+// Login should start with a clean authorization prompt. Config is still loaded
+// so login can resolve the same environment, but its normal startup diagnostics
+// are not useful until the Bridge actually starts.
+const _isLoginCommand = isLoginCommand(process.argv);
 
 // ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
 function _findDotenv(): string | null {
@@ -44,9 +50,11 @@ try {
     process.env[key] = val;
   }
   _dotenvPath = envFile;
-  console.log(`Reading config from: ${envFile}`);
-  const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
-  console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
+  if (!_isLoginCommand) {
+    console.log(`Reading config from: ${envFile}`);
+    const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
+    console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
+  }
 } catch { /* no .env file — fine */ }
 
 // ── Linux TLS: ensure the npm ws package can find CA certificates ─────────────
@@ -123,6 +131,10 @@ export function restrictProvidersTo(allowed: Set<string>): void {
 // Inactivity timeout for all providers. Fires only when the agent produces no
 // output for this many minutes — an actively working agent is never killed.
 export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '10', 10);
+/** Hard limit for a read-only prompt-to-graph proposal. Kept short so an abandoned draft never occupies a local agent. */
+export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '90', 10) || 90);
+/** Poll interval for OpenClaw's ephemeral planning session log (sessions_spawn has no synchronous response). */
+export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.env.GRAPH_GENERATION_SESSION_POLL_MS || '400', 10) || 400);
 
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
 export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
@@ -253,9 +265,9 @@ const agentsRoot = path.join(BASE_PATH, '.ctrlnode');
 if (!fs.existsSync(agentsRoot)) {
   try {
     fs.mkdirSync(agentsRoot, { recursive: true });
-    logger.debug(`Bootstrap: Created missing agents root at ${agentsRoot}`);
+    if (!_isLoginCommand) logger.debug(`Bootstrap: Created missing agents root at ${agentsRoot}`);
   } catch (err) {
-    logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
+    if (!_isLoginCommand) logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
   }
 
   // ── Save interactive answers to .env so next run skips prompts ──────────────
@@ -275,10 +287,10 @@ if (!fs.existsSync(agentsRoot)) {
         fs.mkdirSync(ctrlnodeDir, { recursive: true });
         const envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
-        console.log(`\n  ✓ Configuration saved to ${envPath}`);
+        if (!_isLoginCommand) console.log(`\n  ✓ Configuration saved to ${envPath}`);
       }
     } catch (e: any) {
-      console.warn(`  ⚠ Could not save .env: ${e.message}`);
+      if (!_isLoginCommand) console.warn(`  ⚠ Could not save .env: ${e.message}`);
     }
   }
 }
@@ -313,7 +325,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.5';
+export const BRIDGE_VERSION = 'v2026.2.6';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -373,22 +385,24 @@ export async function ensurePairingToken(): Promise<void> {
 
 // Startup credential diagnostics — informational only; missing keys cause task
 // failures at dispatch time, not Bridge startup failures.
-if (!ANTHROPIC_API_KEY) {
-  logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
-} else {
-  logger.info('anthropic_api_key_detected', { mode: 'api-key' });
-}
+if (!_isLoginCommand) {
+  if (!ANTHROPIC_API_KEY) {
+    logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
+  } else {
+    logger.info('anthropic_api_key_detected', { mode: 'api-key' });
+  }
 
-if (!CURSOR_API_KEY) {
-  logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
-} else {
-  logger.info('cursor_api_key_detected', { mode: 'api-key' });
-}
+  if (!CURSOR_API_KEY) {
+    logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
+  } else {
+    logger.info('cursor_api_key_detected', { mode: 'api-key' });
+  }
 
-if (!OPENROUTER_API_KEY) {
-  logger.info('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
-} else {
-  logger.info('openrouter_api_key_detected', { mode: 'api-key' });
+  if (!OPENROUTER_API_KEY) {
+    logger.info('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
+  } else {
+    logger.info('openrouter_api_key_detected', { mode: 'api-key' });
+  }
 }
 
 // ── Resolve OPENCLAW_CONFIG ───────────────────────────────────────────────────
@@ -402,7 +416,9 @@ export function refreshOpenClawConfig(): string {
   });
 
   OPENCLAW_CONFIG = resolvedConfig.path;
-  logger.debug('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
+  if (!_isLoginCommand) {
+    logger.debug('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
+  }
   return OPENCLAW_CONFIG;
 }
 
@@ -410,10 +426,12 @@ export function refreshOpenClawConfig(): string {
 // the active PROVIDERS list so the factory skips it instead of crashing.
 refreshOpenClawConfig();
 if (!fs.existsSync(OPENCLAW_CONFIG)) {
-  logger.info('openclaw_config_not_found', {
-    path: OPENCLAW_CONFIG,
-    note: 'OpenClaw provider disabled. Set OPENCLAW_HOME or ensure ~/.openclaw/openclaw.json exists to enable it.',
-  });
+  if (!_isLoginCommand) {
+    logger.info('openclaw_config_not_found', {
+      path: OPENCLAW_CONFIG,
+      note: 'OpenClaw provider disabled. Set OPENCLAW_HOME or ensure ~/.openclaw/openclaw.json exists to enable it.',
+    });
+  }
   PROVIDERS = PROVIDERS.filter(p => p !== 'openclaw');
   PROVIDER = PROVIDERS[0];
 }

@@ -6,6 +6,7 @@
  * stateful polling timers.
  */
 
+import fs from 'fs';
 import path from 'path';
 import { getTaskSubagentSession } from './subagentSessions.js';
 import { logger } from './logger.js';
@@ -55,6 +56,59 @@ export function detectStatusTagFromMessages(
          :                            'blocked';
   }
   return null;
+}
+
+// ── Ephemeral planning session (generateStructuredPlan over OpenClaw) ─────────
+
+/** Returned by {@link readEphemeralPlanResult}. */
+export interface EphemeralPlanResult {
+  status: 'pending' | 'done' | 'failed' | 'blocked';
+  /** Assistant text with the status tag stripped. Present when status !== 'pending'. */
+  text?: string;
+}
+
+/**
+ * Pure, synchronous read of a single ephemeral OpenClaw subagent session
+ * (`agent:{agentId}:subagent:{planningId}`), used to poll a read-only
+ * structured-planning request without any stateful timers. Returns `pending`
+ * until the model emits its status tag for this exact `planningId` — a tag
+ * carrying a different id (stale context from a reused session slot) is
+ * ignored, mirroring {@link detectStatusTagFromMessages}.
+ */
+export function readEphemeralPlanResult(
+  index: Record<string, any>,
+  sessionsDir: string,
+  agentId: string,
+  planningId: string,
+): EphemeralPlanResult {
+  const entry = resolveTaskSessionEntry(index, agentId, planningId);
+  if (!entry) return { status: 'pending' };
+
+  const jsonlPath: string | undefined = entry.sessionFile
+    ?? (entry.sessionId ? path.join(sessionsDir, `${entry.sessionId}.jsonl`) : undefined);
+  if (!jsonlPath || !fs.existsSync(jsonlPath)) return { status: 'pending' };
+
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean);
+  } catch {
+    return { status: 'pending' };
+  }
+
+  const messages = parseMessagesFromLines(lines);
+  const status = detectStatusTagFromMessages(messages, planningId);
+  if (!status) return { status: 'pending' };
+
+  const tagWord = status === 'done' ? 'TASK_COMPLETED' : status === 'failed' ? 'TASK_FAILED' : 'TASK_BLOCKED';
+  const tagRe = new RegExp(`<${tagWord}:${planningId}>`, 'i');
+  const text = messages
+    .filter((m) => m.role === 'assistant')
+    .map((m) => m.text)
+    .join('\n\n')
+    .replace(tagRe, '')
+    .trim();
+
+  return { status, text };
 }
 
 /**
