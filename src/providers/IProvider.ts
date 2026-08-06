@@ -39,12 +39,25 @@ export interface SendToSessionParams {
   taskFolderName?: string;
 }
 
+export interface GenerateStructuredPlanParams {
+  agentId: string;
+  prompt: string;
+  workingDir: string;
+  /** Bounded read-only planning time supplied by Bridge configuration. */
+  timeoutMs: number;
+}
+
 export interface IProvider {
   /** Lowercase provider identifier matching AgentInfo.provider (e.g. 'copilot', 'cursor', 'codex'). */
   readonly providerName: string;
   discoverAgents(): Promise<AgentSummary[]>;
   dispatchTask(params: DispatchTaskParams, callbacks: TaskCallbacks): Promise<void>;
   sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void>;
+  /**
+   * Produces one read-only, structured planning response. It must not create task
+   * folders, persist a task session, or emit task lifecycle callbacks.
+   */
+  generateStructuredPlan?(params: GenerateStructuredPlanParams): Promise<string>;
   invokeTool(msg: any, sendToSaas: (payload: any) => void): Promise<void>;
   dispose(): Promise<void>;
   /** Remove an agent from the provider's registry (e.g. Cursor Agent.delete). Returns true if deleted. */

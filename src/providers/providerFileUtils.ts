@@ -89,8 +89,79 @@ export function writeOutputFile(
   }
 }
 
+// ── Per-execution agent log naming ────────────────────────────────────────────
+
 /**
- * Write the agent conversation log to `<taskFolderPath>/output/agent_log.md`.
+ * Counts existing followup input files (`<shortId>-followup-<N>.md`) under
+ * `<taskFolderAbs>/input` to determine which followup number is in progress.
+ * Shared by `prepareFollowupFiles` (writing the next followup's input) and the
+ * agent-log naming helpers below (so both agree on the same N without
+ * duplicating the globbing logic).
+ */
+function countExistingFollowups(taskFolderAbs: string): number {
+  const inputDir = path.join(taskFolderAbs, 'input');
+  return fs.existsSync(inputDir)
+    ? fs.readdirSync(inputDir).filter(f => f.match(/^[^-]+-followup-\d+\.md$/)).length
+    : 0;
+}
+
+/**
+ * Returns the agent-log file name for a given followup number: `agent_log.md`
+ * for the initial run (n === 0), `agent_log.followup-N.md` for followup N.
+ * Each execution (initial run or a given followup) gets its own log file
+ * instead of every run overwriting the same `agent_log.md`, which previously
+ * made Agent Activity show the most recent turn's content stomped over (or,
+ * when a prior-history block was prepended into the prompt, interleaved with)
+ * earlier turns.
+ */
+export function agentLogFileNameForFollowup(followupN: number): string {
+  return followupN > 0 ? `agent_log.followup-${followupN}.md` : 'agent_log.md';
+}
+
+/**
+ * Resolves the agent-log file name for the CURRENT execution of a task, based
+ * on how many followups already exist on disk. Call this once at the start of
+ * a run/followup dispatch — the same value must be used for the write at the
+ * end of that turn.
+ */
+export function resolveCurrentAgentLogFileName(taskFolderAbs: string): string {
+  return agentLogFileNameForFollowup(countExistingFollowups(taskFolderAbs));
+}
+
+/**
+ * Reads and concatenates ALL agent logs for a task (initial run + every
+ * followup, in order) so a stateless provider's prompt can carry full prior
+ * context across followups — as opposed to only the latest turn's log, which
+ * would lose earlier turns entirely once per-turn log files were introduced.
+ * Returns '' if no logs exist yet.
+ */
+export function readAllAgentLogsForContext(taskFolderAbs: string): string {
+  const outputDir = path.join(taskFolderAbs, 'output');
+  if (!fs.existsSync(outputDir)) return '';
+
+  const followupCount = countExistingFollowups(taskFolderAbs);
+  const parts: string[] = [];
+  for (let n = 0; n <= followupCount; n++) {
+    const file = path.join(outputDir, agentLogFileNameForFollowup(n));
+    try {
+      if (fs.existsSync(file)) {
+        const content = fs.readFileSync(file, 'utf-8').trim();
+        if (content) parts.push(content);
+      }
+    } catch {
+      // skip unreadable log, keep collecting the rest
+    }
+  }
+  return parts.join('\n\n---\n\n');
+}
+
+/**
+ * Write the agent conversation log to `<taskFolderPath>/output/<logFileName>`.
+ * @param logFileName  File name for this execution's log — use
+ *   `resolveCurrentAgentLogFileName` (or `agentLogFileNameForFollowup`) so each
+ *   run/followup gets its own file instead of overwriting the previous one.
+ *   Defaults to `agent_log.md` for callers that haven't been updated to pass it
+ *   explicitly (single-execution providers with no followup concept yet).
  * @param logPrefix  Provider-specific log prefix, e.g. "cursor_sdk" or "gemini_acp".
  */
 export function writeAgentLog(
@@ -98,11 +169,12 @@ export function writeAgentLog(
   taskFolderPath: string,
   text: string,
   logPrefix: string,
+  logFileName: string = 'agent_log.md',
 ): void {
   try {
     const outputDir = path.join(taskFolderPath, 'output');
     fs.mkdirSync(outputDir, { recursive: true });
-    const logFile = path.join(outputDir, 'agent_log.md');
+    const logFile = path.join(outputDir, logFileName);
     fs.writeFileSync(logFile, text, 'utf8');
     logger.debug(`${logPrefix}.agent_log_written`, { taskId, path: logFile });
   } catch (err: any) {
@@ -113,13 +185,39 @@ export function writeAgentLog(
 // ── ACP filesystem sandbox ────────────────────────────────────────────────────
 
 /**
+ * Strips a redundant leading prefix from `filePath` when the model has (incorrectly)
+ * re-specified the sandbox's own trailing path segments, e.g. calling `write_file` with
+ * `tasks/openr/07-09/abc-task/output/x.html` while already running inside
+ * `.../tasks/openr/07-09/abc-task` — this otherwise doubles the directory
+ * (`.../abc-task/tasks/openr/07-09/abc-task/output/x.html`). Confirmed real behavior
+ * from openai/gpt-5-nano via OpenRouter. Only strips when the match is anchored at a
+ * path-segment boundary (not a partial directory-name match), and only compares
+ * against the FULL sandbox path (or any suffix of it split on segment boundaries) so a
+ * merely similar-looking but unrelated relative path is left untouched.
+ */
+function stripRedundantSandboxPrefix(filePath: string, sandboxRoot: string): string {
+  const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const rootSegments = path.resolve(sandboxRoot).split(path.sep).filter(Boolean);
+  const pathSegments = normalizedPath.split('/').filter(Boolean);
+
+  for (let take = Math.min(rootSegments.length, pathSegments.length); take > 0; take--) {
+    const rootSuffix = rootSegments.slice(rootSegments.length - take);
+    const pathPrefix = pathSegments.slice(0, take);
+    if (rootSuffix.every((seg, i) => seg === pathPrefix[i])) {
+      return pathSegments.slice(take).join('/');
+    }
+  }
+  return normalizedPath;
+}
+
+/**
  * Resolves `filePath` relative to `sandboxRoot` and returns the absolute path
  * only if it stays inside the sandbox. Returns null for any path that escapes.
  */
 export function resolveSecurePath(filePath: string, sandboxRoot: string): string | null {
   const resolved = path.isAbsolute(filePath)
     ? path.normalize(filePath)
-    : path.resolve(sandboxRoot, filePath);
+    : path.resolve(sandboxRoot, stripRedundantSandboxPrefix(filePath, sandboxRoot));
   const normalRoot = path.resolve(sandboxRoot);
   return resolved.startsWith(normalRoot + path.sep) || resolved === normalRoot
     ? resolved
@@ -162,8 +260,11 @@ export function createInactivityTimer(
  * Rules:
  *  - The fallback `*-output.md` is only written when the agent did NOT already
  *    produce that file on disk (avoids duplicates when the agent used file tools).
- *  - `agent_log.md` is always written so the conversation is persisted.
- *  - When `activityLogText` is set, it is used for `agent_log.md` instead of
+ *  - The agent log for this execution is always written so the conversation is
+ *    persisted — as `agent_log.md` for the initial run, or
+ *    `agent_log.followup-N.md` for followup N (see `resolveCurrentAgentLogFileName`),
+ *    so each execution keeps its own log instead of overwriting the previous one.
+ *  - When `activityLogText` is set, it is used for the log instead of
  *    `accumulatedText` (final chat reply only), so tool lines are not lost.
  *
  * @param taskFolderName  Relative path from CTRLNODE_ROOT, e.g. "tasks/cursorp/05-06/abc-task".
@@ -189,8 +290,53 @@ export function writeTaskOutputs(
 
   const logBody = (activityLogText?.trim() || accumulatedText.trim());
   if (logBody) {
-    writeAgentLog(taskId, taskFullPath, logBody, logPrefix);
+    const logFileName = resolveCurrentAgentLogFileName(taskFullPath);
+    writeAgentLog(taskId, taskFullPath, logBody, logPrefix, logFileName);
   }
+}
+
+// ── Stale-session recovery (shared across stateful providers) ─────────────────
+
+/**
+ * True when `text` (a stderr blob or SDK error message) indicates the provider's
+ * native session store no longer has the requested conversation — e.g. the
+ * Claude CLI's "No conversation found with session ID: ..." error. Providers
+ * that resume via a native session id (not the stateless followup log block)
+ * use this to detect a stale `resumeSessionId` and retry as a fresh session.
+ */
+export function isStaleSessionError(text: string): boolean {
+  if (!text) return false;
+  return /no\s+conversation\s+found\s+with\s+session/i.test(text);
+}
+
+/**
+ * Builds a recovery prompt for a follow-up whose native session resume failed
+ * because the provider no longer recognizes the session id. Prepends every
+ * prior execution's agent-log content (initial run + all followups so far, in
+ * order — not just the current turn's not-yet-written log) so the agent
+ * regains full context despite starting a brand-new session instead of truly
+ * resuming.
+ *
+ * @param agentLogPathOrTaskFolder  Accepts either a direct path to a single
+ *   agent-log file (legacy single-execution callers) or the task's absolute
+ *   folder (preferred — reads and concatenates ALL per-execution logs via
+ *   `readAllAgentLogsForContext`). Detected by checking whether the path's
+ *   basename looks like an agent-log file name.
+ */
+export function buildStaleSessionRecoveryPrompt(agentLogPathOrTaskFolder: string, originalPrompt: string): string {
+  try {
+    const isDirectLogFile = /^agent_log(\.followup-\d+)?\.md$/.test(path.basename(agentLogPathOrTaskFolder));
+    const logContent = isDirectLogFile
+      ? (fs.existsSync(agentLogPathOrTaskFolder) ? fs.readFileSync(agentLogPathOrTaskFolder, 'utf-8').trim() : '')
+      : readAllAgentLogsForContext(agentLogPathOrTaskFolder);
+
+    if (logContent) {
+      return `## Prior task conversation log\n\nThe previous conversation history is unavailable (session expired), so this is a new session. The following is the conversation log from every previous run of this task, in order. Use it as context to understand what was already done before responding.\n\n${logContent}\n\n---\n\n${originalPrompt}`;
+    }
+  } catch {
+    // fall through to plain prompt
+  }
+  return originalPrompt;
 }
 
 // ── Followup file preparation (shared across all providers) ───────────────────
@@ -202,7 +348,7 @@ export interface FollowupFileResult {
   followupOutputRel: string;
   /** Instruction block to inject into the agent prompt (output file instruction only) */
   followupLogBlock: string;
-  /** Same as followupLogBlock but also includes the agent_log.md content as prior-context */
+  /** Same as followupLogBlock but also includes the full prior agent-log history (every execution's log, in order) as context */
   followupLogBlockWithHistory: string;
   /** Sequential number used (1-based) */
   followupN: number;
@@ -216,7 +362,7 @@ export interface FollowupFileResult {
  * get consistent followup file handling without duplicating this logic.
  *
  * `followupLogBlock`            — output-file instruction only (for providers with native session resume)
- * `followupLogBlockWithHistory` — same + agent_log.md content prepended (for stateless providers)
+ * `followupLogBlockWithHistory` — same + full prior agent-log history prepended (for stateless providers)
  */
 export function prepareFollowupFiles(
   taskId: string,
@@ -229,6 +375,11 @@ export function prepareFollowupFiles(
 
   const folderBasename = taskFolderName ? path.basename(taskFolderName) : taskId.slice(0, 8);
   const shortId = folderBasename.split('-')[0] ?? taskId.slice(0, 8);
+
+  // Read prior history BEFORE writing this followup's own input file below —
+  // otherwise countExistingFollowups() (used internally) would count this
+  // followup as already existing and skip its own not-yet-written log.
+  const priorHistory = readAllAgentLogsForContext(taskFolderAbs);
 
   const inputDir = path.join(taskFolderAbs, 'input');
   fs.mkdirSync(inputDir, { recursive: true });
@@ -252,20 +403,11 @@ export function prepareFollowupFiles(
 
   const followupLogBlock = `## Follow-up output file\n\nWrite your follow-up result to this file using the Write tool:\n\`${followupOutputRel}\``;
 
-  // Try to load agent_log.md from the previous run so stateless providers have prior context.
-  const agentLogPath = path.join(taskFolderAbs, 'output', 'agent_log.md');
   let followupLogBlockWithHistory = followupLogBlock;
-  try {
-    if (fs.existsSync(agentLogPath)) {
-      const logContent = fs.readFileSync(agentLogPath, 'utf-8').trim();
-      if (logContent) {
-        followupLogBlockWithHistory =
-          `## Prior task conversation log\n\nThe following is the conversation log from the previous task run. Use it as context to understand what was already done before responding to the follow-up.\n\n${logContent}\n\n---\n\n${followupLogBlock}`;
-        logger.info('followup_files.history_loaded', { taskId, logBytes: logContent.length });
-      }
-    }
-  } catch (e: any) {
-    logger.warn('followup_files.history_load_failed', { taskId, error: e?.message });
+  if (priorHistory) {
+    followupLogBlockWithHistory =
+      `## Prior task conversation log\n\nThe following is the conversation log from every previous run of this task (initial run and any earlier follow-ups), in order. Use it as context to understand what was already done before responding to the follow-up.\n\n${priorHistory}\n\n---\n\n${followupLogBlock}`;
+    logger.info('followup_files.history_loaded', { taskId, logBytes: priorHistory.length });
   }
 
   return { followupInputFile, followupOutputRel, followupLogBlock, followupLogBlockWithHistory, followupN, followupBaseName };

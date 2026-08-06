@@ -28,7 +28,7 @@ import { CTRLNODE_ROOT, HERMES_HOME, TASK_TIMEOUT_MINUTES } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { writeOutputFile, writeAgentLog, createInactivityTimer } from './providerFileUtils.js';
+import { writeOutputFile, writeAgentLog, createInactivityTimer, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 import {
   formatHermesLogLineForActivity,
   extractHermesSessionId,
@@ -227,7 +227,8 @@ export class HermesProvider implements IProvider {
             writeOutputFile(taskId, taskFullPath, folderBasename, outputText, 'hermes_provider');
           }
           if (agentLogText.trim()) {
-            writeAgentLog(taskId, taskFullPath, agentLogText, 'hermes_provider');
+            const logFileName = resolveCurrentAgentLogFileName(taskFullPath);
+            writeAgentLog(taskId, taskFullPath, agentLogText, 'hermes_provider', logFileName);
           }
         }
         logger.info('hermes_provider.complete', { agentId, taskId, status, sessionId: activeSessionId });

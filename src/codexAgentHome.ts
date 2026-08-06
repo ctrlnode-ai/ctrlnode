@@ -21,6 +21,30 @@ export function getCodexAgentHome(agentId: string): string {
 }
 
 /**
+ * Copies the shared Codex login cache into an isolated agent home.
+ *
+ * Codex CLI reads ChatGPT subscription credentials from auth.json under
+ * CODEX_HOME. Agent homes are intentionally separate for sessions/config, so
+ * they must receive the shared login cache before the CLI is spawned.
+ */
+export function syncCodexAuthToAgentHome(agentHome: string, sharedHome: string | undefined): boolean {
+  if (!sharedHome) return false;
+
+  const source = path.join(sharedHome, 'auth.json');
+  if (!fs.existsSync(source)) return false;
+
+  try {
+    fs.mkdirSync(agentHome, { recursive: true });
+    fs.copyFileSync(source, path.join(agentHome, 'auth.json'));
+    logger.debug('codex_agent_home.auth_synced', { agentHome });
+    return true;
+  } catch (e) {
+    logger.warn('codex_agent_home.auth_sync_failed', { agentHome, err: String(e) });
+    return false;
+  }
+}
+
+/**
  * Provisions the per-agent CODEX_HOME directory with AGENTS.md and optionally
  * config.toml (copied from the shared CODEX_HOME if set). Called once when the
  * agent is registered via sync_codex_agents — not on every task execution.
@@ -36,6 +60,8 @@ export function setupCodexAgentHome(agentId: string, agentDescription: string): 
     if (sharedConfig && fs.existsSync(sharedConfig)) {
       fs.copyFileSync(sharedConfig, path.join(agentHome, 'config.toml'));
     }
+
+    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
 
     // Ensure the ctrlnode root workspace is trusted so Codex CLI permits workspace-write sandbox.
     // Also set [windows] sandbox = "unelevated" — without it Codex ignores --sandbox workspace-write

@@ -21,6 +21,17 @@ export function resolveTaskPaths(
   return { taskFolder, outputFolder: path.join(taskFolder, 'output') };
 }
 
+/**
+ * Path for the Claude SDK session-id persistence file (resume-after-restart).
+ * Lives inside the task's real folder — the same location output/CLAUDE.md use —
+ * so it only falls back to a flat `tasks/<taskId>/` directory when taskFolderName
+ * is genuinely unavailable, instead of always bypassing the real nested folder.
+ */
+export function resolveSessionFilePath(taskFolderName: string | undefined, taskId: string): string {
+  const { taskFolder } = resolveTaskPaths(taskFolderName, taskId);
+  return path.join(taskFolder, 'session_id');
+}
+
 export function resolveTaskLogAbsolutePath(taskLogRelativePath: string | undefined): string | null {
   if (!taskLogRelativePath?.trim()) return null;
   const rel = taskLogRelativePath.replace(/^[/\\]+/, '').replace(/\\/g, '/');

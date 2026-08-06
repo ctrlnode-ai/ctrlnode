@@ -11,7 +11,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
@@ -24,7 +24,7 @@ import { detectStatusTag, writeTaskOutputs, createInactivityTimer, resolveSecure
 import { mapAcpUpdate, formatAcpToolCallActivity } from './acpUpdateMapper.js';
 import { HermesProvider } from './HermesProvider.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection } from './acpCommon.js';
+import { buildAcpSpawnCommand, createProcEarlyExit, createAcpStream, initAcpConnection, runAcpStructuredPlan } from './acpCommon.js';
 import {
   getHermesAgentHome,
   setupHermesAgentHome,
@@ -111,6 +111,48 @@ export class HermesAcpProvider implements IProvider {
       undefined,
       params.agentId,
     );
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    if (!(await this.useAcp())) {
+      // The CLI fallback (`hermes chat -Q -q`) has no equivalent to a bounded,
+      // read-only single-turn call — it is a stateful chat REPL, not a completion API.
+      throw new Error('GRAPH_GENERATION_UNSUPPORTED_PROVIDER');
+    }
+
+    const { cmd, args } = buildAcpSpawnCommand('hermes', ['acp']);
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const agentInfo = discoveredAgents[params.agentId];
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (agentInfo) {
+      ensureHermesProfile(params.agentId, {
+        name: agentInfo.name,
+        role: agentInfo.role,
+        description: agentInfo.description,
+        model: agentInfo.model,
+      });
+      env['HERMES_HOME'] = getHermesProfileHome(params.agentId);
+    } else if (HERMES_HOME) {
+      env['HERMES_HOME'] = HERMES_HOME;
+    }
+
+    logger.info('hermes_acp.graph_generation_start', { agentId: params.agentId, cwd });
+    try {
+      const result = await runAcpStructuredPlan({
+        providerLog: 'hermes_acp',
+        cmd,
+        args,
+        cwd,
+        env,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+      });
+      logger.info('hermes_acp.graph_generation_completed', { agentId: params.agentId, responseLength: result.length });
+      return result;
+    } catch (error: any) {
+      logger.warn('hermes_acp.graph_generation_failed', { agentId: params.agentId, error: error?.message });
+      throw error;
+    }
   }
 
   async invokeTool(_msg: unknown, sendToSaas: (payload: unknown) => void): Promise<void> {

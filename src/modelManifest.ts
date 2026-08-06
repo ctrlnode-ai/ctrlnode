@@ -13,20 +13,20 @@
  *              message after handshake. Bridge stores it, overwriting the disk cache.
  *
  * Priority for model lists (highest → lowest):
- *   1. Provider native API (Anthropic, Gemini) — handled in each provider
- *   2. In-memory manifest loaded by this module
- *   3. Hardcoded fallback in knownModels.ts
+ *   1. Provider native API (Anthropic, Gemini, Cursor) — handled in each provider
+ *   2. In-memory manifest loaded by this module (ultimately sourced from
+ *      model-manifest.json via the backend's GET /api/bridge/models — the single
+ *      source of truth for providers with no native listModels API, e.g. Copilot)
+ *
+ * No hardcoded fallback: if no manifest has been loaded yet (or a provider isn't
+ * present in it), getKnownModels() returns an empty list — ModelComboBox in the
+ * frontend accepts free-text model ids regardless.
  */
 
 import fs   from 'fs';
 import path from 'path';
 import { SAAS_URL, CTRLNODE_ROOT } from './config.js';
 import { logger } from './logger.js';
-import {
-  COPILOT_KNOWN_MODELS,
-  GEMINI_KNOWN_MODELS,
-  CURSOR_KNOWN_MODELS,
-} from './providers/knownModels.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,24 +45,12 @@ const CACHE_TTL_MS    = 24 * 60 * 60 * 1000;  // 24 hours
 const FETCH_TIMEOUT_MS = 8_000;
 
 /** Derives the HTTP(S) base URL from the WebSocket URL (wss → https, ws → http). */
-function apiBaseUrl(): string {
+export function apiBaseUrl(): string {
   return SAAS_URL
     .replace(/^wss:\/\//, 'https://')
     .replace(/^ws:\/\//, 'http://')
     .replace(/\/ws\/bridge$/, '');
 }
-
-// ── Hardcoded fallbacks (last resort) ─────────────────────────────────────────
-
-const HARDCODED_FALLBACK: Record<string, string[]> = {
-  claude:  [
-    'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6',
-    'claude-haiku-4-5', 'claude-opus-4-6', 'claude-sonnet-4-5',
-  ],
-  copilot: COPILOT_KNOWN_MODELS,
-  gemini:  GEMINI_KNOWN_MODELS,
-  cursor:  CURSOR_KNOWN_MODELS,
-};
 
 // ── In-memory cache ────────────────────────────────────────────────────────────
 
@@ -170,11 +158,14 @@ export function applyManifestFromServer(data: { version?: string; providers?: Re
 }
 
 /**
- * Returns the known model list for a provider.
- * Uses the loaded manifest if available, otherwise falls back to the hardcoded list.
+ * Returns the known model list for a provider from the loaded manifest.
+ * Returns an empty array if no manifest is loaded yet or the provider isn't in it.
  */
 export function getKnownModels(provider: ProviderName): string[] {
-  const fromManifest = _manifest?.providers[provider];
-  if (fromManifest && fromManifest.length > 0) return fromManifest;
-  return HARDCODED_FALLBACK[provider] ?? [];
+  return _manifest?.providers[provider] ?? [];
+}
+
+/** Test-only seam: clears the in-memory manifest so tests can start from a known state. */
+export function __resetModelManifestForTests(): void {
+  _manifest = null;
 }

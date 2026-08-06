@@ -7,6 +7,7 @@ import { getIntentProviderMethod } from './intentDispatchPolicy.js';
 import { setAgentRunning } from './websocket.js';
 import { handleInvokeTool } from './openclawInvoker.js';
 import { prepareFollowupFiles } from './providers/providerFileUtils.js';
+import { GRAPH_GENERATION_TIMEOUT_SECONDS } from './config.js';
 
 /**
  * Main entry point for action-based intents from SaaS.
@@ -30,6 +31,48 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     parsedArgs = typeof args === 'string' && args.trim() ? JSON.parse(args) : (args ?? (content ? { message: content } : undefined));
   } catch {
     parsedArgs = args ?? (content ? { message: content } : undefined);
+  }
+
+  // ── generate_graph_blueprint: read-only structured planning ──────────────────
+  if (intentType === 'generate_graph_blueprint') {
+    const prompt = parsedArgs?.prompt || content || '';
+    if (!prompt) {
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'MISSING_INTENT_PAYLOAD' });
+      return;
+    }
+    if (!ctx.provider.generateStructuredPlan) {
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'GRAPH_GENERATION_UNSUPPORTED_PROVIDER' });
+      return;
+    }
+
+    try {
+      logger.info('graph_generation.started', { agentId: targetId, provider: ctx.provider.providerName });
+      const result = await ctx.provider.generateStructuredPlan({
+        agentId: targetId!,
+        prompt,
+        workingDir: agentInfo.workspace,
+        timeoutMs: GRAPH_GENERATION_TIMEOUT_SECONDS * 1_000,
+      });
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, result });
+      logger.info('graph_generation.completed', { agentId: targetId, provider: ctx.provider.providerName, responseLength: result.length });
+    } catch (err: any) {
+      logger.warn('graph_generation.failed', { agentId: targetId, provider: ctx.provider.providerName, error: err?.message });
+      const errorMessage = err?.message || 'GRAPH_GENERATION_PROVIDER_ERROR';
+      const errorCode = /\b(?:timed?\s*out|abort(?:ed)?)\b/i.test(errorMessage)
+        ? 'GRAPH_GENERATION_TIMEOUT'
+        : errorMessage;
+      ctx.sendToSaas({
+        action: 'intent_result',
+        requestId,
+        agentId: targetId,
+        intentType,
+        providerMethod,
+        executionId,
+        contextTaskId,
+        error: errorCode,
+      });
+    }
+    return;
   }
 
   logger.debug('intent.received', { agentId: targetId, intentType, providerMethod, executionId, contextTaskId, rawArgs: args });

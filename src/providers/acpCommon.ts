@@ -3,6 +3,7 @@
  * Shared utilities for ACP (Agent Client Protocol) provider implementations.
  */
 import * as acp from '@agentclientprotocol/sdk';
+import { spawn } from 'child_process';
 import { Readable, Writable } from 'stream';
 import type { ChildProcess } from 'child_process';
 import { logger } from '../logger.js';
@@ -88,4 +89,101 @@ export async function initAcpConnection(
     clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
   });
   return connection;
+}
+
+// ── Read-only structured planning ───────────────────────────────────────────────
+
+export interface AcpStructuredPlanOptions {
+  /** Log-category prefix, e.g. 'gemini_acp'. */
+  providerLog: string;
+  cmd: string;
+  args: string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  prompt: string;
+  /** Bounded read-only planning time supplied by Bridge configuration. */
+  timeoutMs: number;
+}
+
+/**
+ * Runs one read-only prompt/response turn against an ACP CLI shared by every
+ * ACP-based provider (Gemini, Copilot, Hermes). No MCP servers are registered
+ * (no write tools reach the model) and file writes are rejected defensively,
+ * so a graph-blueprint proposal can never touch disk or persist a session —
+ * only the final assistant text is collected and returned.
+ */
+export function runAcpStructuredPlan(options: AcpStructuredPlanOptions): Promise<string> {
+  const { providerLog, cmd, args, cwd, env, prompt, timeoutMs } = options;
+
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn(cmd, args, {
+      cwd,
+      env: env ?? process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+    });
+
+    if (!proc.stdin || !proc.stdout) {
+      reject(new Error(`Failed to start ${providerLog} process`));
+      return;
+    }
+
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!proc.killed) proc.kill('SIGTERM');
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      logger.warn(`${providerLog}.graph_generation_timeout`, { timeoutMs });
+      finish(() => reject(new Error('GRAPH_GENERATION_TIMEOUT')));
+    }, timeoutMs);
+
+    const earlyExit = createProcEarlyExit(proc, providerLog, 'graph-planning');
+    earlyExit.promise.catch((err) => finish(() => reject(err)));
+
+    const stream = createAcpStream(proc);
+    let accumulatedText = '';
+
+    const client: acp.Client = {
+      async requestPermission() {
+        // Read-only planning never needs a tool approval; deny to fail fast.
+        return { outcome: { outcome: 'cancelled' } };
+      },
+      async sessionUpdate(params) {
+        const update = (params as { update?: unknown }).update as Record<string, unknown> | undefined;
+        if (update?.sessionUpdate === 'agent_message_chunk' && (update.content as any)?.type === 'text') {
+          accumulatedText += String((update.content as any).text ?? '');
+        }
+      },
+      async writeTextFile() {
+        throw new Error('GRAPH_GENERATION_READ_ONLY: planning must not write files');
+      },
+      async readTextFile() {
+        return { content: '' };
+      },
+    };
+
+    (async () => {
+      const connection = await initAcpConnection(stream, client);
+      const session = await connection.newSession({ cwd, mcpServers: [] });
+      const result = await connection.prompt({
+        sessionId: session.sessionId,
+        prompt: [{ type: 'text', text: prompt }],
+      });
+
+      const stopReason = (result as { stopReason?: string }).stopReason;
+      if (stopReason !== 'end_turn') {
+        throw new Error(`GRAPH_GENERATION_PROVIDER_ERROR: unexpected ACP stopReason ${stopReason}`);
+      }
+      const text = accumulatedText.trim();
+      if (!text) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+      return text;
+    })()
+      .then((text) => finish(() => resolve(text)))
+      .catch((err) => finish(() => reject(err instanceof Error ? err : new Error(String(err)))));
+  });
 }

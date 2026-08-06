@@ -83,6 +83,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'dispatch_task':
       await handleIntentAction(msg, ctx, 'dispatch_task');
       break;
+    case 'generate_graph_blueprint':
+      await handleIntentAction(msg, ctx, 'generate_graph_blueprint');
+      break;
     case 'agent_command':
       await handleIntentAction(msg, ctx, 'agent_command');
       break;
@@ -121,6 +124,12 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'sync_hermes_agents':
       handleSyncProviderAgents('hermes', msg, ctx);
+      break;
+    case 'sync_openrouter_agents':
+      handleSyncProviderAgents('openrouter', msg, ctx);
+      break;
+    case 'sync_ollama_agents':
+      handleSyncProviderAgents('ollama', msg, ctx);
       break;
     case 'cancel_task':
       await handleCancelTask(msg, ctx);

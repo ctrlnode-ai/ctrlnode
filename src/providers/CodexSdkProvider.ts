@@ -11,7 +11,7 @@ import { Codex } from '@openai/codex-sdk';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -26,24 +26,42 @@ import {
   type RepoDispatchSpawnContext,
 } from './repoDispatchContext.js';
 import { discoveredAgents } from '../agentDiscovery.js';
-import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
+import { getCodexAgentHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
 import { setAgentRunning } from '../websocket.js';
 import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels, createInactivityTimer } from './providerFileUtils.js';
+import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
 
 /** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
+export function chooseCodexExecutable(candidates: string[], platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform === 'win32') return candidates.find(c => c.toLowerCase().endsWith('.exe'));
+  return candidates[0] ?? undefined;
+}
+
+/**
+ * Resolve a Codex executable from a PATH lookup, optionally preserving a
+ * previously resolved path. The Bridge may run provider health checks after a
+ * child process changes its inherited PATH; a transient lookup failure must
+ * not turn an already-installed provider into "not installed".
+ */
+export function resolveCodexExecutableFromLookup(
+  lookup: () => string[],
+  platform: NodeJS.Platform = process.platform,
+  cachedPath?: string,
+): string | undefined {
+  return cachedPath ?? chooseCodexExecutable(lookup(), platform);
+}
+
+let resolvedCodexExecutable: string | undefined;
+
 function resolveCodexFromPath(): string | undefined {
+  if (resolvedCodexExecutable) return resolvedCodexExecutable;
+
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
   if (result.status !== 0) return undefined;
   const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
-  if (process.platform === 'win32') {
-    // Prefer .exe over .cmd — the SDK cannot spawn a .cmd wrapper directly
-    const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-    if (exe) return exe;
-    // No .exe found — .cmd wrappers don't work, skip
-    return undefined;
-  }
-  return candidates[0] ?? undefined;
+  resolvedCodexExecutable = resolveCodexExecutableFromLookup(() => candidates);
+  return resolvedCodexExecutable;
 }
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
@@ -51,6 +69,48 @@ async function fetchOpenAiModels(): Promise<string[]> {
   const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
   return fetchOpenAiCompatibleModels(apiKey ?? '');
 }
+
+const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'description', 'topology', 'templateFamily', 'schedule', 'nodes'],
+  properties: {
+    name: { type: 'string' },
+    description: { type: 'string' },
+    topology: { type: 'string', enum: ['single', 'linear', 'fan_out_fan_in', 'dag'] },
+    templateFamily: { type: 'string', enum: ['blank', 'research_report', 'linear', 'parallel', 'custom'] },
+    schedule: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'custom'] },
+        time: { type: 'string' },
+        days: { type: 'array', items: { type: 'integer' } },
+        hours: { type: 'array', items: { type: 'integer' } },
+        timezone: { type: 'string' },
+        cron: { type: 'string' },
+      },
+    },
+    nodes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'label', 'instructions', 'taskMode', 'focusFiles', 'outputFolder', 'dependsOn'],
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          instructions: { type: 'string' },
+          taskMode: { type: 'string', enum: ['output', 'repo'] },
+          focusFiles: { type: 'array', items: { type: 'string' } },
+          outputFolder: { type: 'string' },
+          dependsOn: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+} as const;
 
 export class CodexSdkProvider implements IProvider {
   readonly providerName = 'codex';
@@ -92,6 +152,65 @@ export class CodexSdkProvider implements IProvider {
     await this._run(params.taskId, params.message, callbacks, params.agentId, undefined, agentInfo?.description, agentInfo?.model);
   }
 
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const agentHome = getCodexAgentHome(params.agentId);
+    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
+    const modelFromConfig = codexHomeOverride ? readModelFromConfigToml(codexHomeOverride) : undefined;
+    const model = (agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined)
+      ?? modelFromConfig
+      ?? process.env.CODEX_DEFAULT_MODEL
+      ?? undefined;
+    const codexEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      ...(process.env.CODEX_API_KEY ? { OPENAI_API_KEY: process.env.CODEX_API_KEY } : {}),
+      ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+    };
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), params.timeoutMs);
+
+    logger.info('codex_sdk.graph_generation_start', {
+      agentId: params.agentId,
+      cwd,
+      model: model ?? '(default)',
+      timeoutMs: params.timeoutMs,
+    });
+
+    try {
+      const codex = new Codex({
+        ...(process.env.CODEX_BIN_PATH ? { codexPathOverride: process.env.CODEX_BIN_PATH } : {}),
+        env: codexEnv,
+      });
+      const thread = codex.startThread({
+        workingDirectory: cwd,
+        skipGitRepoCheck: true,
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        ...(model ? { model } : {}),
+      });
+      const turn = await thread.run(params.prompt, {
+        outputSchema: GRAPH_BLUEPRINT_OUTPUT_SCHEMA,
+        signal: abortController.signal,
+      });
+      const result = turn.finalResponse.trim();
+      if (!result) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+      logger.info('codex_sdk.graph_generation_completed', {
+        agentId: params.agentId,
+        responseLength: result.length,
+      });
+      return result;
+    } catch (error: any) {
+      if (abortController.signal.aborted || error?.name === 'AbortError') {
+        throw new Error('GRAPH_GENERATION_TIMEOUT');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
   }
@@ -116,12 +235,21 @@ export class CodexSdkProvider implements IProvider {
     return null;
   }
   async listModels(): Promise<string[]> {
-    return fetchOpenAiModels();
+    const codexHome = process.env.CODEX_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '', '.codex');
+    return resolveModelsWithSubscriptionFirst(
+      () => readCodexSubscriptionModels(codexHome),
+      fetchOpenAiModels,
+    );
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils.js');
-    return checkBinaryExists('codex');
+    const resolvedPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
+    logger.info('codex_sdk.health_check', {
+      available: Boolean(resolvedPath),
+      platform: process.platform,
+      resolvedPath: resolvedPath ?? '(not found)',
+    });
+    return Boolean(resolvedPath);
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -152,6 +280,7 @@ export class CodexSdkProvider implements IProvider {
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
     const agentHome = getCodexAgentHome(agentId ?? '');
+    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
     const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
     if (codexHomeOverride) ensureWorkspaceTrusted(codexHomeOverride);
 
