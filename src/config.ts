@@ -135,6 +135,12 @@ export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES ||
 export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '90', 10) || 90);
 /** Poll interval for OpenClaw's ephemeral planning session log (sessions_spawn has no synchronous response). */
 export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.env.GRAPH_GENERATION_SESSION_POLL_MS || '400', 10) || 400);
+/**
+ * Turn budget for Claude's read-only graph-blueprint planner call (ClaudeAgentSdkProvider
+ * and ClaudeCodeProvider). Both run with allowedTools disabled, so this only bounds
+ * self-correction attempts on the JSON response, never a tool-use loop.
+ */
+export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '20', 10) || 20);
 
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
 export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
@@ -347,39 +353,41 @@ if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
 }
 
 /**
- * If PAIRING_TOKEN is missing, prompts the user interactively and persists
- * the token to the .env file. Must be called from index.ts before connect().
+ * Runs the same browser device-login flow as `ctrlnode login` (see login.ts) and
+ * adopts the resulting token into both the in-memory PAIRING_TOKEN and process.env
+ * so the rest of this run picks it up without a restart.
+ *
+ * `runLoginFn` defaults to the real login.ts flow, dynamically imported to avoid a
+ * circular import (login.ts imports config.ts for BRIDGE_VERSION/SAAS_URL) — tests
+ * inject a stub instead of relying on module mocking.
+ */
+export async function loginAndAdoptPairingToken(
+  envFile: string,
+  runLoginFn: (envFile: string) => Promise<string> = async (f) => (await import('./login.js')).runLogin(f),
+): Promise<string> {
+  const token = await runLoginFn(envFile);
+  PAIRING_TOKEN = token;
+  process.env.PAIRING_TOKEN = token;
+  return token;
+}
+
+/**
+ * If PAIRING_TOKEN is missing, runs the browser sign-in flow (same as `ctrlnode
+ * login`) and persists the token to the .env file. Must be called from index.ts
+ * before connect(). Works the same whether the Bridge runs on this machine or a
+ * headless one — the printed URL/code can be approved from any device's browser.
  */
 export async function ensurePairingToken(): Promise<void> {
   if (PAIRING_TOKEN) return;
 
   const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
-  const { createInterface } = await import('readline');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const token = await new Promise<string>(resolve => {
-    rl.question('\nPAIRING_TOKEN not found. Enter your pairing token (Settings → Bridge at app.ctrlnode.ai): ', answer => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-
-  if (!token) {
-    console.error('No token entered. Exiting.');
-    process.exit(1);
-  }
-
-  PAIRING_TOKEN = token;
-  process.env.PAIRING_TOKEN = token;
+  console.log('\nNo PAIRING_TOKEN configured — starting browser sign-in (same as running `ctrlnode login`).\n');
 
   try {
-    fs.mkdirSync(path.dirname(envFile), { recursive: true });
-    const existing = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
-    if (!existing.includes('PAIRING_TOKEN')) {
-      fs.appendFileSync(envFile, `\nPAIRING_TOKEN=${token}\n`, 'utf8');
-      console.log(`Token saved to ${envFile}\n`);
-    }
+    await loginAndAdoptPairingToken(envFile);
   } catch (e: any) {
-    logger.warn('pairing_token_persist_failed', { error: e?.message });
+    console.error(`\nLogin failed: ${e.message}\n`);
+    process.exit(1);
   }
 }
 

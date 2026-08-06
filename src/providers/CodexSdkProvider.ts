@@ -26,24 +26,42 @@ import {
   type RepoDispatchSpawnContext,
 } from './repoDispatchContext.js';
 import { discoveredAgents } from '../agentDiscovery.js';
-import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
+import { getCodexAgentHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
 import { setAgentRunning } from '../websocket.js';
 import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels, createInactivityTimer } from './providerFileUtils.js';
+import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
 
 /** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
+export function chooseCodexExecutable(candidates: string[], platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform === 'win32') return candidates.find(c => c.toLowerCase().endsWith('.exe'));
+  return candidates[0] ?? undefined;
+}
+
+/**
+ * Resolve a Codex executable from a PATH lookup, optionally preserving a
+ * previously resolved path. The Bridge may run provider health checks after a
+ * child process changes its inherited PATH; a transient lookup failure must
+ * not turn an already-installed provider into "not installed".
+ */
+export function resolveCodexExecutableFromLookup(
+  lookup: () => string[],
+  platform: NodeJS.Platform = process.platform,
+  cachedPath?: string,
+): string | undefined {
+  return cachedPath ?? chooseCodexExecutable(lookup(), platform);
+}
+
+let resolvedCodexExecutable: string | undefined;
+
 function resolveCodexFromPath(): string | undefined {
+  if (resolvedCodexExecutable) return resolvedCodexExecutable;
+
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
   if (result.status !== 0) return undefined;
   const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
-  if (process.platform === 'win32') {
-    // Prefer .exe over .cmd — the SDK cannot spawn a .cmd wrapper directly
-    const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-    if (exe) return exe;
-    // No .exe found — .cmd wrappers don't work, skip
-    return undefined;
-  }
-  return candidates[0] ?? undefined;
+  resolvedCodexExecutable = resolveCodexExecutableFromLookup(() => candidates);
+  return resolvedCodexExecutable;
 }
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
@@ -138,6 +156,7 @@ export class CodexSdkProvider implements IProvider {
     const agentInfo = discoveredAgents[params.agentId];
     const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
     const agentHome = getCodexAgentHome(params.agentId);
+    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
     const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
     const modelFromConfig = codexHomeOverride ? readModelFromConfigToml(codexHomeOverride) : undefined;
     const model = (agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined)
@@ -216,12 +235,21 @@ export class CodexSdkProvider implements IProvider {
     return null;
   }
   async listModels(): Promise<string[]> {
-    return fetchOpenAiModels();
+    const codexHome = process.env.CODEX_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '', '.codex');
+    return resolveModelsWithSubscriptionFirst(
+      () => readCodexSubscriptionModels(codexHome),
+      fetchOpenAiModels,
+    );
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils.js');
-    return checkBinaryExists('codex');
+    const resolvedPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
+    logger.info('codex_sdk.health_check', {
+      available: Boolean(resolvedPath),
+      platform: process.platform,
+      resolvedPath: resolvedPath ?? '(not found)',
+    });
+    return Boolean(resolvedPath);
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -252,6 +280,7 @@ export class CodexSdkProvider implements IProvider {
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
     const agentHome = getCodexAgentHome(agentId ?? '');
+    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
     const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
     if (codexHomeOverride) ensureWorkspaceTrusted(codexHomeOverride);
 

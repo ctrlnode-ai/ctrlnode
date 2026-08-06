@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
-import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES } from '../config.js';
+import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES, GRAPH_GENERATION_MAX_TURNS } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, resolveRepoDispatchSpawn, resolveTaskPaths } from './repoDispatchContext.js';
@@ -151,8 +151,13 @@ export class ClaudeCodeProvider implements IProvider {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
+      // Read-only guarantee: no tools available to the model during graph-blueprint
+      // generation (see management/docs/08-04-ai-graph-generation-plan) — it can
+      // only read the prompt and respond with JSON, never write files or run
+      // commands. GRAPH_GENERATION_MAX_TURNS is generous purely to give the model
+      // room to self-correct its JSON response, not to allow a tool-use loop.
       '--allowedTools', '',
-      '--max-turns', '2',
+      '--max-turns', String(GRAPH_GENERATION_MAX_TURNS),
       '--no-session-persistence',
       ...(model ? ['--model', model] : []),
       '-p', params.prompt,
@@ -249,7 +254,13 @@ export class ClaudeCodeProvider implements IProvider {
   async listModels(): Promise<string[]> {
     const { fetchAnthropicModels } = await import('./providerFileUtils.js');
     const { ANTHROPIC_API_KEY } = await import('../config.js');
-    return fetchAnthropicModels(ANTHROPIC_API_KEY);
+    const { resolveModelsWithSubscriptionFirst } = await import('../subscriptionModelResolution.js');
+    const { getKnownModels } = await import('../modelManifest.js');
+    const credentialsPath = path.join(process.env.USERPROFILE || process.env.HOME || '', '.claude', '.credentials.json');
+    return resolveModelsWithSubscriptionFirst(
+      async () => fs.existsSync(credentialsPath) ? getKnownModels('claude') : [],
+      () => fetchAnthropicModels(ANTHROPIC_API_KEY),
+    );
   }
 
   async isAvailable(): Promise<boolean> {

@@ -29,12 +29,13 @@ describe('ClaudeAgentSdkProvider.sendToSession stale-session recovery', () => {
         lastPromptSeen = prompt;
         lastOptionsSeen = options;
         if (callCount === 1) {
+          // Real SDK error results carry `errors: string[]`, not a singular `.error` string.
           return asyncFrom([
-            { type: 'result', subtype: 'error', session_id: 'stale-session-id', error: 'No conversation found with session ID: stale-session-id' },
+            { type: 'result', subtype: 'error_during_execution', session_id: 'stale-session-id', errors: ['No conversation found with session ID: stale-session-id'] },
           ]);
         }
         return asyncFrom([
-          { type: 'result', subtype: 'max_turns', session_id: 'fresh-session-id' },
+          { type: 'result', subtype: 'error_max_turns', session_id: 'fresh-session-id' },
         ]);
       },
     }));
@@ -74,15 +75,17 @@ describe('ClaudeAgentSdkProvider.sendToSession task folder resolution', () => {
     if (realTaskFolder) fs.rmSync(realTaskFolder, { recursive: true, force: true });
   });
 
-  test('writes output under taskFolderName, not the disconnected tasks/{taskId} folder, and keeps session_id at the fixed location', async () => {
+  test('writes output and session_id under taskFolderName, never the disconnected tasks/{taskId} folder', async () => {
     let lastOptionsSeen: any;
 
     mock.module('@anthropic-ai/claude-agent-sdk', () => ({
       query: ({ options }: any) => {
         lastOptionsSeen = options;
+        // Note: keep this non-"success" (blocked) so the provider's real output-stability
+        // poller (15s window) doesn't run during the test.
         return asyncFrom([
           { type: 'assistant', message: { content: [{ type: 'text', text: 'hello from followup' }] } },
-          { type: 'result', subtype: 'max_turns', session_id: 'new-session-id' },
+          { type: 'result', subtype: 'error_max_turns', session_id: 'new-session-id' },
         ]);
       },
     }));
@@ -95,9 +98,10 @@ describe('ClaudeAgentSdkProvider.sendToSession task folder resolution', () => {
     realTaskFolder = path.join(CTRLNODE_ROOT, taskFolderName);
     taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
 
-    // session_id lives at the fixed taskId-keyed location (written by a prior dispatch).
-    fs.mkdirSync(taskFolder, { recursive: true });
-    fs.writeFileSync(path.join(taskFolder, 'session_id'), 'prev-session-id', 'utf-8');
+    // session_id lives inside the real nested task folder (written by a prior dispatch
+    // that also had taskFolderName available).
+    fs.mkdirSync(realTaskFolder, { recursive: true });
+    fs.writeFileSync(path.join(realTaskFolder, 'session_id'), 'prev-session-id', 'utf-8');
 
     const onComplete = mock((_status: string, _reason?: string) => {});
     await provider.sendToSession(
@@ -109,9 +113,113 @@ describe('ClaudeAgentSdkProvider.sendToSession task folder resolution', () => {
     expect(fs.existsSync(path.join(taskFolder, 'output'))).toBe(false);
     expect(lastOptionsSeen.additionalDirectories).toContain(realTaskFolder);
     expect(lastOptionsSeen.additionalDirectories).not.toContain(taskFolder);
+    expect(lastOptionsSeen.resume).toBe('prev-session-id');
 
-    // session_id stays at the fixed taskId-keyed location, unchanged.
-    expect(fs.existsSync(path.join(taskFolder, 'session_id'))).toBe(true);
-    expect(fs.readFileSync(path.join(taskFolder, 'session_id'), 'utf-8')).toBe('new-session-id');
+    // session_id is persisted inside the real task folder, not the flat tasks/{taskId} one.
+    expect(fs.existsSync(path.join(realTaskFolder, 'session_id'))).toBe(true);
+    expect(fs.readFileSync(path.join(realTaskFolder, 'session_id'), 'utf-8')).toBe('new-session-id');
+    expect(fs.existsSync(taskFolder)).toBe(false);
+  });
+});
+
+describe('ClaudeAgentSdkProvider — real SDK error-result shape', () => {
+  afterEach(() => mock.restore());
+
+  test('generateStructuredPlan surfaces the real error text (errors[]) instead of a generic fallback', async () => {
+    mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+      query: () => asyncFrom([
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 's1',
+          errors: ['overloaded_error: Anthropic API is temporarily overloaded'],
+        },
+      ]),
+    }));
+
+    const { ClaudeAgentSdkProvider } = await import('../providers/ClaudeAgentSdkProvider');
+    const provider = new ClaudeAgentSdkProvider();
+
+    await expect(
+      provider.generateStructuredPlan({
+        agentId: 'local',
+        prompt: 'plan something',
+        workingDir: '/tmp/does-not-exist',
+        timeoutMs: 5_000,
+      } as any)
+    ).rejects.toThrow('overloaded_error: Anthropic API is temporarily overloaded');
+  });
+
+  test('generateStructuredPlan still identifies error_max_turns as a timeout, not a generic provider error', async () => {
+    mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+      query: () => asyncFrom([
+        { type: 'result', subtype: 'error_max_turns', session_id: 's1', errors: [] },
+      ]),
+    }));
+
+    const { ClaudeAgentSdkProvider } = await import('../providers/ClaudeAgentSdkProvider');
+    const provider = new ClaudeAgentSdkProvider();
+
+    await expect(
+      provider.generateStructuredPlan({
+        agentId: 'local',
+        prompt: 'plan something',
+        workingDir: '/tmp/does-not-exist',
+        timeoutMs: 5_000,
+      } as any)
+    ).rejects.toThrow('GRAPH_GENERATION_TIMEOUT');
+  });
+
+  test('generateStructuredPlan falls back to a subtype-qualified message when the SDK gives no error text at all', async () => {
+    mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+      query: () => asyncFrom([
+        { type: 'result', subtype: 'error_max_budget_usd', session_id: 's1', errors: [] },
+      ]),
+    }));
+
+    const { ClaudeAgentSdkProvider } = await import('../providers/ClaudeAgentSdkProvider');
+    const provider = new ClaudeAgentSdkProvider();
+
+    await expect(
+      provider.generateStructuredPlan({
+        agentId: 'local',
+        prompt: 'plan something',
+        workingDir: '/tmp/does-not-exist',
+        timeoutMs: 5_000,
+      } as any)
+    ).rejects.toThrow('GRAPH_GENERATION_PROVIDER_ERROR: error_max_budget_usd');
+  });
+
+  test('dispatchTask marks the task failed with the real SDK error text, not a blocked/max_turns label', async () => {
+    let taskFolder: string | undefined;
+    mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+      query: () => asyncFrom([
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 's1',
+          errors: ['overloaded_error: Anthropic API is temporarily overloaded'],
+        },
+      ]),
+    }));
+
+    const { ClaudeAgentSdkProvider } = await import('../providers/ClaudeAgentSdkProvider');
+    const provider = new ClaudeAgentSdkProvider();
+
+    const taskId = 'sdk-real-error-shape-task';
+    const taskFolderName = `tasks/demo/real-error-${taskId}`;
+    taskFolder = path.join(CTRLNODE_ROOT, taskFolderName);
+
+    const onComplete = mock((_status: string, _reason?: string) => {});
+    try {
+      await provider.dispatchTask(
+        { agentId: 'local', taskId, prompt: 'do work', taskFolderName } as any,
+        { onStream: () => {}, onMessage: () => {}, onComplete }
+      );
+
+      expect(onComplete).toHaveBeenCalledWith('failed', 'overloaded_error: Anthropic API is temporarily overloaded');
+    } finally {
+      if (taskFolder && fs.existsSync(taskFolder)) fs.rmSync(taskFolder, { recursive: true, force: true });
+    }
   });
 });

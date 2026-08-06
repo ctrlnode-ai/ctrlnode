@@ -30,13 +30,17 @@ import {
   TASK_TIMEOUT_MINUTES,
   CLAUDE_SDK_PERMISSION_MODE,
   CLAUDE_SDK_EXECUTABLE,
+  GRAPH_GENERATION_MAX_TURNS,
 } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
+import { resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
+import { getKnownModels } from '../modelManifest.js';
 import { detectStatusTag, fetchAnthropicModels as _fetchAnthropicModels, writeTaskOutputs, createInactivityTimer, isStaleSessionError, buildStaleSessionRecoveryPrompt, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
 import {
   appendTaskLogToSystemParts,
   resolveRepoDispatchSpawn,
+  resolveSessionFilePath,
   resolveTaskPaths,
 } from './repoDispatchContext.js';
 import { ClaudePlannerTextCollector } from '../graphBlueprintPlanner.js';
@@ -67,6 +71,21 @@ function splitPromptInstructions(prompt: string): { taskBody: string; instructio
     taskBody: prompt.slice(0, idx).trim(),
     instructionsBlock: ('## INSTRUCTIONS\n' + prompt.slice(idx + marker.length)).trim(),
   };
+}
+
+/**
+ * Real SDK error results (`SDKResultError`) carry `errors: string[]`, not a singular
+ * `.error` string — reading `.error` (as this file used to) is always undefined for
+ * genuine failures, silently discarding the actual reason. Extracts a readable
+ * message from either shape (defensive against SDK version drift).
+ */
+function extractSdkResultErrorMessage(result: any): string | undefined {
+  if (typeof result?.error === 'string' && result.error.trim()) return result.error;
+  if (Array.isArray(result?.errors) && result.errors.length > 0) {
+    const joined = result.errors.filter(Boolean).join('; ');
+    if (joined) return joined;
+  }
+  return undefined;
 }
 
 // How long the output folder must be unchanged before we consider the process done.
@@ -139,7 +158,7 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     // Clear any previous session so a fresh dispatch never resumes a stale session (e.g. RERUN).
     this.sessionCache.delete(taskId);
-    const sessionFile = path.join(CTRLNODE_ROOT, 'tasks', taskId, 'session_id');
+    const sessionFile = resolveSessionFilePath(taskFolderName, taskId);
     if (fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile);
     fs.mkdirSync(outputFolder, { recursive: true });
 
@@ -207,11 +226,10 @@ export class ClaudeAgentSdkProvider implements IProvider {
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     const { taskId, message, agentId, taskFolderName } = params;
 
-    // session_id persistence is intentionally keyed by taskId alone (stable location
-    // regardless of taskFolderName, which isn't always available at every resume call
-    // site) — this stays fixed even though output/log/CLAUDE.md below now resolve to
-    // the real task folder.
-    const sessionFile = path.join(CTRLNODE_ROOT, 'tasks', taskId, 'session_id');
+    // Lives inside the task's real folder (same location output/log/CLAUDE.md below
+    // resolve to) when taskFolderName is known; only falls back to the flat
+    // tasks/<taskId>/ layout if it's genuinely unavailable.
+    const sessionFile = resolveSessionFilePath(taskFolderName, taskId);
     const prevSessionId = this.sessionCache.get(taskId)
       ?? (fs.existsSync(sessionFile) ? fs.readFileSync(sessionFile, 'utf-8').trim() : undefined);
     if (prevSessionId) {
@@ -271,9 +289,14 @@ export class ClaudeAgentSdkProvider implements IProvider {
     const timeout = setTimeout(() => abortController.abort(), params.timeoutMs);
     const options: Options = {
       cwd,
+      // Read-only guarantee: no tools available to the model during graph-blueprint
+      // generation (see management/docs/08-04-ai-graph-generation-plan) — it can
+      // only read the prompt and respond with JSON, never write files or run
+      // commands. GRAPH_GENERATION_MAX_TURNS is generous purely to give the model
+      // room to self-correct its JSON response, not to allow a tool-use loop.
       allowedTools: [],
       permissionMode: 'dontAsk' as any,
-      maxTurns: 2,
+      maxTurns: GRAPH_GENERATION_MAX_TURNS,
       persistSession: false,
       includePartialMessages: true,
       abortController,
@@ -288,9 +311,9 @@ export class ClaudeAgentSdkProvider implements IProvider {
         if ((message as any).type === 'result') {
           const result = message as any;
           if (result.subtype !== 'success') {
-            throw new Error(result.subtype === 'max_turns'
-              ? 'GRAPH_GENERATION_TIMEOUT'
-              : (result.error ?? 'GRAPH_GENERATION_PROVIDER_ERROR'));
+            if (result.subtype === 'error_max_turns') throw new Error('GRAPH_GENERATION_TIMEOUT');
+            const message = extractSdkResultErrorMessage(result);
+            throw new Error(message ?? `GRAPH_GENERATION_PROVIDER_ERROR: ${result.subtype}`);
           }
         }
       }
@@ -334,7 +357,11 @@ export class ClaudeAgentSdkProvider implements IProvider {
     return null;
   }
   async listModels(): Promise<string[]> {
-    return _fetchAnthropicModels(ANTHROPIC_API_KEY);
+    const credentialsPath = path.join(process.env.USERPROFILE || process.env.HOME || '', '.claude', '.credentials.json');
+    return resolveModelsWithSubscriptionFirst(
+      async () => fs.existsSync(credentialsPath) ? getKnownModels('claude') : [],
+      () => _fetchAnthropicModels(ANTHROPIC_API_KEY),
+    );
   }
 
   async isAvailable(): Promise<boolean> {
@@ -447,14 +474,16 @@ export class ClaudeAgentSdkProvider implements IProvider {
         if (msgType === 'result') {
           const result = message as any;
           sessionId = result.session_id;
-          // max_turns means the agent ran out of turns without finishing → blocked (retriable)
+          // error_max_turns means the agent ran out of turns without finishing → blocked (retriable)
           // any other non-success subtype → failed
-          if (result.subtype === 'max_turns') {
+          if (result.subtype === 'error_max_turns') {
             completedStatus = 'blocked';
             completedReason = `max_turns (limit: ${CLAUDE_SDK_MAX_TURNS})`;
           } else {
             completedStatus = result.subtype === 'success' ? 'completed' : 'failed';
-            completedReason = result.subtype !== 'success' ? (result.error ?? result.subtype) : undefined;
+            completedReason = result.subtype !== 'success'
+              ? (extractSdkResultErrorMessage(result) ?? result.subtype)
+              : undefined;
           }
 
           logger.info('claude_sdk_provider.result', {
@@ -573,12 +602,13 @@ export class ClaudeAgentSdkProvider implements IProvider {
 
     if (sessionId && taskId) {
       this.sessionCache.set(taskId, sessionId);
-      // Persist to disk keyed by taskId UUID so followup can resume even after a Bridge restart.
-      // Always use CTRLNODE_ROOT/tasks/<taskId>/ regardless of taskFolderName (which may vary).
-      const sessionDir = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+      // Persist to disk so followup can resume even after a Bridge restart. Lives
+      // inside the task's real folder when taskFolderName is known, so it doesn't
+      // create a stray flat directory directly under tasks/.
+      const sessionFilePath = resolveSessionFilePath(taskFolderName, taskId);
       try {
-        fs.mkdirSync(sessionDir, { recursive: true });
-        fs.writeFileSync(path.join(sessionDir, 'session_id'), sessionId, 'utf-8');
+        fs.mkdirSync(path.dirname(sessionFilePath), { recursive: true });
+        fs.writeFileSync(sessionFilePath, sessionId, 'utf-8');
         logger.info('claude_sdk_provider.session_persisted', { taskId, sessionId });
       } catch (e: any) {
         logger.warn('claude_sdk_provider.session_persist_failed', { taskId, error: e?.message });

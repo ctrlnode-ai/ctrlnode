@@ -90,9 +90,9 @@ async function pollForToken(apiBase: string, deviceCode: string, expiresInSecond
 
 /**
  * Runs the device-login flow and, on success, writes PAIRING_TOKEN into the given .env file.
- * Returns once the token is written (or throws on failure/timeout/rejection).
+ * Returns the pairing token once written (or throws on failure/timeout/rejection).
  */
-export async function runLogin(envFile: string): Promise<void> {
+export async function runLogin(envFile: string): Promise<string> {
   const apiBase = apiBaseUrl();
 
   console.log('\nRequesting a login code...\n');
@@ -112,6 +112,8 @@ export async function runLogin(envFile: string): Promise<void> {
   mergeEnvFile(envFile, { PAIRING_TOKEN: pairingToken });
   console.log('Login successful — PAIRING_TOKEN saved.');
   console.log(`  Config: ${envFile}\n`);
+
+  return pairingToken;
 }
 
 /** Resolves the same .env path config.ts uses, for use before config.ts has loaded. */
