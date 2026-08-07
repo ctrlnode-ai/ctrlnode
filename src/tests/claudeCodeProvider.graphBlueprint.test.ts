@@ -55,6 +55,6 @@ describe('ClaudeCodeProvider.generateStructuredPlan', () => {
     expect(spawnArgs).toContain('--allowedTools');
     expect(spawnArgs[spawnArgs.indexOf('--allowedTools') + 1]).toBe('');
     expect(spawnArgs).toContain('--max-turns');
-    expect(spawnArgs[spawnArgs.indexOf('--max-turns') + 1]).toBe('20');
+    expect(spawnArgs[spawnArgs.indexOf('--max-turns') + 1]).toBe('50');
   });
 });

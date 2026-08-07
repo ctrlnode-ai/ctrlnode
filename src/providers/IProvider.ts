@@ -47,6 +47,13 @@ export interface GenerateStructuredPlanParams {
   timeoutMs: number;
 }
 
+export type ProviderHealthReason = 'binary_missing' | 'auth_required' | 'service_unreachable';
+
+export interface ProviderHealth {
+  available: boolean;
+  reason?: ProviderHealthReason;
+}
+
 export interface IProvider {
   /** Lowercase provider identifier matching AgentInfo.provider (e.g. 'copilot', 'cursor', 'codex'). */
   readonly providerName: string;
@@ -95,4 +102,6 @@ export interface IProvider {
    * Default (when not implemented): assumed available (true).
    */
   isAvailable?(): Promise<boolean>;
+  /** Rich live health used by Bridge status reporting. */
+  checkHealth?(): Promise<ProviderHealth>;
 }

@@ -4,10 +4,21 @@ import { HandlerContext } from './handlerContext.js';
 import { discoveredAgents, agentStatuses } from './agentDiscovery.js';
 import { resolveTargetAgentId } from './agentRouting.js';
 import { getIntentProviderMethod } from './intentDispatchPolicy.js';
-import { setAgentRunning } from './websocket.js';
+import { reportProviderHealth, setAgentRunning } from './websocket.js';
 import { handleInvokeTool } from './openclawInvoker.js';
 import { prepareFollowupFiles } from './providers/providerFileUtils.js';
-import { GRAPH_GENERATION_TIMEOUT_SECONDS } from './config.js';
+import { GRAPH_GENERATION_TIMEOUT_SECONDS, LOG_THINKING } from './config.js';
+import { appendTaskProgressLog } from './providers/providerFileUtils.js';
+
+function reportTaskProgress(ctx: HandlerContext, taskId: string | undefined, agentId: string | undefined, taskFolderName: string | undefined, event: any): void {
+  if (!taskId || !agentId || !event) return;
+  const kind = event.kind === 'thinking_delta' ? 'thinking' : event.kind;
+  if (!['thinking', 'text_chunk', 'text_delta', 'tool_call', 'tool_result', 'file_written', 'run_status'].includes(kind)) return;
+  const text = typeof event.text === 'string' ? event.text : undefined;
+  const path = typeof event.path === 'string' ? event.path : undefined;
+  if (kind !== 'thinking' || LOG_THINKING) appendTaskProgressLog(taskFolderName, kind, text, path);
+  ctx.sendToSaas({ action: 'task_progress', taskId, agentId, kind, text: kind === 'thinking' && !LOG_THINKING ? undefined : text, path, timestamp: new Date().toISOString() });
+}
 
 /**
  * Main entry point for action-based intents from SaaS.
@@ -58,6 +69,8 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     } catch (err: any) {
       logger.warn('graph_generation.failed', { agentId: targetId, provider: ctx.provider.providerName, error: err?.message });
       const errorMessage = err?.message || 'GRAPH_GENERATION_PROVIDER_ERROR';
+      if (/\b(?:401|oauth|auth(?:entication)?|token).*?(?:expired|invalid|required|fail)/i.test(errorMessage))
+        reportProviderHealth(agentInfo.provider ?? ctx.provider.providerName, { available: false, reason: 'auth_required' });
       const errorCode = /\b(?:timed?\s*out|abort(?:ed)?)\b/i.test(errorMessage)
         ? 'GRAPH_GENERATION_TIMEOUT'
         : errorMessage;
@@ -113,6 +126,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
         },
         {
           onStream: (event) => {
+            reportTaskProgress(ctx, contextTaskId, targetId, taskFolderName, event);
             if (event?.type === 'assistant' || event?.type === 'tool_use' || event?.type === 'tool_result'
                 || event?.kind === 'text_chunk' || event?.kind === 'tool_call' || event?.kind === 'tool_result') {
               setAgentRunning(targetId!);
@@ -197,6 +211,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
         },
         {
           onStream: (event) => {
+            reportTaskProgress(ctx, contextTaskId, targetId, taskFolderName, event);
             if (event?.type === 'assistant' || event?.type === 'tool_use' || event?.type === 'tool_result'
                 || event?.kind === 'text_chunk' || event?.kind === 'tool_call' || event?.kind === 'tool_result') {
               setAgentRunning(targetId!);

@@ -47,7 +47,7 @@ describe('handleIntentAction — generate_graph_blueprint', () => {
       agentId,
       prompt: 'Create a daily engineering brief.',
       workingDir: '/tmp/planning-agent',
-      timeoutMs: 90_000,
+      timeoutMs: 300_000,
     }));
     expect(sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
       action: 'intent_result',

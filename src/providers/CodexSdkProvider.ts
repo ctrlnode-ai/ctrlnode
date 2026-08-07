@@ -26,7 +26,7 @@ import {
   type RepoDispatchSpawnContext,
 } from './repoDispatchContext.js';
 import { discoveredAgents } from '../agentDiscovery.js';
-import { getCodexAgentHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
+import { getCodexAgentHome, resolveCodexHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
 import { setAgentRunning } from '../websocket.js';
 import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels, createInactivityTimer } from './providerFileUtils.js';
 import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
@@ -35,6 +35,35 @@ import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from 
 export function chooseCodexExecutable(candidates: string[], platform: NodeJS.Platform = process.platform): string | undefined {
   if (platform === 'win32') return candidates.find(c => c.toLowerCase().endsWith('.exe'));
   return candidates[0] ?? undefined;
+}
+
+/** Build portable candidates for common npm, local-bin and VS Code installations. */
+export function buildKnownCodexCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const home = env.USERPROFILE || env.HOME || '';
+  const slash = (...parts: string[]) => parts.filter(Boolean).join('/').replace(/\/+/g, '/');
+  if (platform === 'win32') {
+    const appData = env.APPDATA || slash(home, 'AppData/Roaming');
+    return [
+      slash(appData, 'npm/codex.exe'),
+      slash(appData, 'npm/codex.cmd'),
+      slash(appData, 'npm/codex'),
+      slash(home, 'AppData/Local/bin/codex.exe'),
+      slash(home, '.vscode/extensions/openai.chatgpt/bin/windows-x86_64/codex.exe'),
+    ];
+  }
+
+  return [
+    '/usr/local/bin/codex',
+    '/usr/bin/codex',
+    slash(home, '.local/bin/codex'),
+    slash(home, '.npm-global/bin/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/linux-x86_64/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/macos-arm64/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/macos-x86_64/codex'),
+  ];
 }
 
 /**
@@ -58,10 +87,41 @@ function resolveCodexFromPath(): string | undefined {
 
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
-  if (result.status !== 0) return undefined;
-  const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
-  resolvedCodexExecutable = resolveCodexExecutableFromLookup(() => candidates);
+  if (result.status === 0) {
+    const candidates = result.stdout.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    resolvedCodexExecutable = resolveCodexExecutableFromLookup(() => candidates);
+  }
+  if (!resolvedCodexExecutable) {
+    const knownCandidates = [
+      ...buildKnownCodexCandidates(),
+      ...resolveCodexFromVsCodeExtensions(),
+    ];
+    const existingCandidates = knownCandidates.filter(candidate => fs.existsSync(candidate));
+    resolvedCodexExecutable = chooseCodexExecutable(existingCandidates);
+  }
   return resolvedCodexExecutable;
+}
+
+function resolveCodexFromVsCodeExtensions(): string[] {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  if (!home) return [];
+  const extensionsRoot = path.join(home, '.vscode', 'extensions');
+  try {
+    return fs.readdirSync(extensionsRoot)
+      .filter(entry => entry.toLowerCase().startsWith('openai.chatgpt'))
+      .map(entry => path.join(
+        extensionsRoot,
+        entry,
+        'bin',
+        process.platform === 'win32'
+          ? 'windows-x86_64/codex.exe'
+          : process.platform === 'darwin'
+            ? 'macos-arm64/codex'
+            : 'linux-x86_64/codex',
+      ));
+  } catch {
+    return [];
+  }
 }
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
@@ -156,8 +216,9 @@ export class CodexSdkProvider implements IProvider {
     const agentInfo = discoveredAgents[params.agentId];
     const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
     const agentHome = getCodexAgentHome(params.agentId);
-    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
-    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
+    const sharedCodexHome = resolveCodexHome();
+    syncCodexAuthToAgentHome(agentHome, sharedCodexHome);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : sharedCodexHome;
     const modelFromConfig = codexHomeOverride ? readModelFromConfigToml(codexHomeOverride) : undefined;
     const model = (agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined)
       ?? modelFromConfig
@@ -235,7 +296,8 @@ export class CodexSdkProvider implements IProvider {
     return null;
   }
   async listModels(): Promise<string[]> {
-    const codexHome = process.env.CODEX_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '', '.codex');
+    const codexHome = resolveCodexHome();
+    if (!codexHome) return [];
     return resolveModelsWithSubscriptionFirst(
       () => readCodexSubscriptionModels(codexHome),
       fetchOpenAiModels,
@@ -280,8 +342,9 @@ export class CodexSdkProvider implements IProvider {
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
     const agentHome = getCodexAgentHome(agentId ?? '');
-    syncCodexAuthToAgentHome(agentHome, process.env.CODEX_HOME);
-    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
+    const sharedCodexHome = resolveCodexHome();
+    syncCodexAuthToAgentHome(agentHome, sharedCodexHome);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : sharedCodexHome;
     if (codexHomeOverride) ensureWorkspaceTrusted(codexHomeOverride);
 
     // Report the configured model immediately so the UI shows it.

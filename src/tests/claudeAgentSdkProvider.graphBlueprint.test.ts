@@ -35,7 +35,7 @@ describe('ClaudeAgentSdkProvider.generateStructuredPlan', () => {
     // generation (see management/docs/08-04-ai-graph-generation-plan) — only the
     // turn budget changes, not the isolation.
     expect(optionsSeen.allowedTools).toEqual([]);
-    expect(optionsSeen.maxTurns).toBe(20);
+    expect(optionsSeen.maxTurns).toBe(50);
     expect(optionsSeen.permissionMode).toBe('dontAsk');
   });
 });

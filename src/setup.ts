@@ -10,6 +10,7 @@ import fs from 'fs';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
 import { mergeEnvFile, promptProviderApiKeys } from './setupEnv.js';
+import { runLogin } from './login.js';
 
 function ask(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise(resolve => rl.question(question, answer => resolve(answer.trim())));
@@ -57,23 +58,31 @@ export async function runSetup(): Promise<void> {
   // ── Optional provider API keys ───────────────────────────────────────────────
   const providerKeys = await promptProviderApiKeys(askLine);
 
-  // ── Pairing token ─────────────────────────────────────────────────────────────
-  console.log('Enter your pairing token.');
-  console.log('  Get it at: https://app.ctrlnode.ai  (Settings → Bridge)');
-  const token = await askLine('Pairing token: ');
-  rl.close();
-
-  if (!token) {
-    console.error('No token entered. Exiting.');
-    process.exit(1);
-  }
-
-  // ── Write .env ────────────────────────────────────────────────────────────────
+  // ── .env location (needed before pairing so browser login can write directly) ──
   const envDir  = path.join(workspace, '.ctrlnode');
   const envFile = path.join(envDir, '.env');
   fs.mkdirSync(envDir, { recursive: true });
+
+  // ── Pairing token ─────────────────────────────────────────────────────────────
+  console.log('Pairing token');
+  console.log('  Press Enter to sign in via browser (recommended), or paste a token');
+  console.log('  from https://app.ctrlnode.ai (Settings → Bridge) if you already have one.');
+  const token = await askLine('Pairing token (Enter to sign in via browser): ');
+  rl.close();
+
+  if (token) {
+    mergeEnvFile(envFile, { PAIRING_TOKEN: token });
+  } else {
+    try {
+      await runLogin(envFile);
+    } catch (err: any) {
+      console.error(`\nLogin failed: ${err.message}\n`);
+      process.exit(1);
+    }
+  }
+
+  // ── Write provider keys ──────────────────────────────────────────────────────
   mergeEnvFile(envFile, {
-    PAIRING_TOKEN: token,
     ...(providerKeys.cursorApiKey ? { CURSOR_API_KEY: providerKeys.cursorApiKey } : {}),
     ...(providerKeys.anthropicApiKey ? { ANTHROPIC_API_KEY: providerKeys.anthropicApiKey } : {}),
     ...(providerKeys.openrouterApiKey ? { OPENROUTER_API_KEY: providerKeys.openrouterApiKey } : {}),

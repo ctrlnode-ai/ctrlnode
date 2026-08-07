@@ -130,9 +130,11 @@ export function restrictProvidersTo(allowed: Set<string>): void {
 // ── Shared task timeout ───────────────────────────────────────────────────────
 // Inactivity timeout for all providers. Fires only when the agent produces no
 // output for this many minutes — an actively working agent is never killed.
-export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '10', 10);
+export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '30', 10);
 /** Hard limit for a read-only prompt-to-graph proposal. Kept short so an abandoned draft never occupies a local agent. */
-export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '90', 10) || 90);
+export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '300', 10) || 300);
+/** Persist provider-exposed thinking summaries to agent_log.md. Enabled by default for task observability. */
+export const LOG_THINKING = /^true$/i.test(process.env.LOG_THINKING || 'true');
 /** Poll interval for OpenClaw's ephemeral planning session log (sessions_spawn has no synchronous response). */
 export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.env.GRAPH_GENERATION_SESSION_POLL_MS || '400', 10) || 400);
 /**
@@ -140,10 +142,10 @@ export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.en
  * and ClaudeCodeProvider). Both run with allowedTools disabled, so this only bounds
  * self-correction attempts on the JSON response, never a tool-use loop.
  */
-export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '20', 10) || 20);
+export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '50', 10) || 50);
 
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
-export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
+export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '200', 10);
 // Default true: Claude Code prompts for permission even for tools listed in --allowedTools
 // when running non-interactively. Skip-permissions is required so file writes don't hang.
 export const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS !== 'false';
@@ -170,7 +172,7 @@ export let CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
 export let ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 export const CLAUDE_SDK_TOOLS = process.env.CLAUDE_SDK_TOOLS || 'Read,Write,Edit,Bash,Glob,Grep';
-export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '50', 10);
+export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '200', 10);
 /** bypassPermissions | acceptEdits | dontAsk — default bypassPermissions for unattended agents */
 export const CLAUDE_SDK_PERMISSION_MODE = process.env.CLAUDE_SDK_PERMISSION_MODE || 'bypassPermissions';
 /**

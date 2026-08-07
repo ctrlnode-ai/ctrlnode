@@ -31,7 +31,7 @@ import type { AgentInfo } from './types.js';
 import { startWatcher, stopWatcher, processFileEvent } from './watcher.js';
 import { handleMessage } from './messageHandlers.js';
 import { logger } from './logger.js';
-import { IProvider } from './providers/IProvider.js';
+import { IProvider, ProviderHealth } from './providers/IProvider.js';
 import { HermesProvider } from './providers/HermesProvider.js';
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ let isConnected    = false;
 let activeProvider: IProvider | null = null;
 
 /** Last-known provider health snapshot — used to send deltas on heartbeat. */
-let lastProviderHealth: Record<string, boolean> = {};
+let lastProviderHealth: Record<string, ProviderHealth> = {};
 
 let heartbeatTimer:        ReturnType<typeof setInterval>  | null = null;
 let reconnectTimer:        ReturnType<typeof setTimeout>   | null = null;
@@ -138,20 +138,20 @@ async function checkAndSendProviderHealth(isFirstCheck: boolean): Promise<void> 
   if (typeof mp.checkAllProviders !== 'function') return;
 
   try {
-    const health: Record<string, boolean> = await mp.checkAllProviders();
-    const delta: Record<string, boolean> = {};
+    const health: Record<string, ProviderHealth> = await mp.checkAllProviders();
+    const delta: Record<string, ProviderHealth> = {};
     let hasChanges = false;
 
-    for (const [name, available] of Object.entries(health)) {
-      if (isFirstCheck || lastProviderHealth[name] !== available) {
-        delta[name] = available;
+    for (const [name, providerHealth] of Object.entries(health)) {
+      if (isFirstCheck || lastProviderHealth[name]?.available !== providerHealth.available || lastProviderHealth[name]?.reason !== providerHealth.reason) {
+        delta[name] = providerHealth;
         hasChanges = true;
       }
     }
 
     if (hasChanges) {
       lastProviderHealth = { ...health };
-      const unhealthy = Object.entries(health).filter(([, v]) => !v).map(([k]) => k);
+      const unhealthy = Object.entries(health).filter(([, v]) => !v.available).map(([k]) => k);
       logger.info('provider_health_sent', {
         delta: Object.keys(delta).join(',') || 'none',
         unhealthy: unhealthy.join(',') || 'none',
@@ -161,6 +161,13 @@ async function checkAndSendProviderHealth(isFirstCheck: boolean): Promise<void> 
   } catch (err: any) {
     logger.warn('provider_health_check_failed', { error: err?.message });
   }
+}
+
+/** Reports a runtime provider failure immediately instead of waiting for the next heartbeat. */
+export function reportProviderHealth(provider: string, health: ProviderHealth): void {
+  lastProviderHealth = { ...lastProviderHealth, [provider]: health };
+  logger.warn('provider_health_runtime_reported', { provider, available: health.available, reason: health.reason });
+  sendToSaas({ action: 'provider_health', providerHealth: { [provider]: health } });
 }
 
 // ── Heartbeat ─────────────────────────────────────────────────────────────────
