@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { syncCodexAuthToAgentHome } from '../codexAgentHome.js';
+import { getKnownCodexHomeCandidates, resolveCodexHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -32,5 +32,22 @@ describe('syncCodexAuthToAgentHome', () => {
 
     expect(syncCodexAuthToAgentHome(path.join(root, 'agent'), path.join(root, 'shared'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'agent', 'auth.json'))).toBe(false);
+  });
+});
+
+describe('resolveCodexHome', () => {
+  test('finds the standard Windows Codex home without CODEX_HOME', () => {
+    const candidates = getKnownCodexHomeCandidates('win32', {
+      USERPROFILE: 'C:/Users/vil',
+      APPDATA: 'C:/Users/vil/AppData/Roaming',
+    });
+
+    expect(candidates).toContain('C:/Users/vil/.codex');
+    expect(candidates).toContain('C:/Users/vil/AppData/Roaming/.codex');
+  });
+
+  test('returns the first existing standard home', () => {
+    expect(resolveCodexHome({ CODEX_HOME: '', HOME: '/home/vil' }, 'linux', (candidate) => candidate === '/home/vil/.codex'))
+      .toBe('/home/vil/.codex');
   });
 });

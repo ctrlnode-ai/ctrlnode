@@ -9,6 +9,7 @@ import { CursorSdkProvider } from './CursorSdkProvider.js';
 import { HermesAcpProvider } from './HermesAcpProvider.js';
 import { OpenRouterProvider } from './OpenRouterProvider.js';
 import { OllamaProvider } from './OllamaProvider.js';
+import { logger } from '../logger.js';
 
 /**
  * Providers this Bridge build actually knows how to construct. Exported so config.ts
@@ -22,7 +23,7 @@ export const KNOWN_PROVIDERS = new Set(['openclaw', 'claude', 'claude-sdk', 'cop
 
 export function createProvider(name: string): IProvider {
   if (!KNOWN_PROVIDERS.has(name)) {
-    console.error(`Unknown provider: "${name}". Valid values: ${[...KNOWN_PROVIDERS].join(', ')}`);
+    logger.error('unknown_provider', { provider: name, providers: [...KNOWN_PROVIDERS].join(', ') });
     process.exit(1);
   }
   if (name === 'claude')       return new ClaudeAgentSdkProvider();

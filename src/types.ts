@@ -142,4 +142,6 @@ export interface BridgeMessage {
   agents?: string;
   /** Provider name (e.g. "openclaw", "claude", "cursor") — when set, filesystem ops are routed to that provider rather than by agentOwner. */
   provider?: string;
+  /** New relative path for rename_folder operations. */
+  newPath?: string;
 }

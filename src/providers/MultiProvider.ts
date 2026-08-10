@@ -11,7 +11,7 @@
  */
 
 import { logger } from '../logger.js';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { discoveredAgents, normalizeAgentId } from '../agentDiscovery.js';
 
@@ -185,17 +185,22 @@ export class MultiProvider implements IProvider {
    * Returns a map of providerName → boolean.
    * Providers that don't implement isAvailable() are assumed available (true).
    */
-  async checkAllProviders(): Promise<Record<string, boolean>> {
+  async checkAllProviders(): Promise<Record<string, ProviderHealth>> {
     const results = await Promise.allSettled(
       this.providers.map(async p => ({
         name: p.providerName,
-        available: p.isAvailable ? await p.isAvailable() : true,
+        health: p.checkHealth
+          ? await p.checkHealth()
+          : await (async () => {
+              const available = p.isAvailable ? await p.isAvailable() : true;
+              return available ? { available } : { available, reason: 'service_unreachable' as const };
+            })(),
       })),
     );
-    const health: Record<string, boolean> = {};
+    const health: Record<string, ProviderHealth> = {};
     for (const r of results) {
       if (r.status === 'fulfilled') {
-        health[r.value.name] = r.value.available;
+        health[r.value.name] = r.value.health;
       }
     }
     return health;

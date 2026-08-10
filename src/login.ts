@@ -37,6 +37,11 @@ function tryOpenBrowser(url: string): void {
   } catch { /* ignore — user still has the URL printed above */ }
 }
 
+/** Derives the web app's base URL from the device-code verificationUri (strips the known /bridge/activate suffix). */
+function deriveAppUrl(verificationUri: string): string {
+  return verificationUri.replace(/\/bridge\/activate\/?$/, '') || verificationUri;
+}
+
 async function requestDeviceCode(apiBase: string): Promise<DeviceCodeResponse> {
   const resp = await fetch(`${apiBase}/api/bridge/device/code`, {
     method: 'POST',
@@ -112,6 +117,11 @@ export async function runLogin(envFile: string): Promise<string> {
   mergeEnvFile(envFile, { PAIRING_TOKEN: pairingToken });
   console.log('Login successful — PAIRING_TOKEN saved.');
   console.log(`  Config: ${envFile}\n`);
+
+  const appUrl = deriveAppUrl(verificationUri);
+  console.log(`Opening your browser automatically (if available): ${appUrl}`);
+  console.log(`If it doesn't open, visit it yourself: ${appUrl}\n`);
+  tryOpenBrowser(appUrl);
 
   return pairingToken;
 }

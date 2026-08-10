@@ -84,6 +84,20 @@ export async function deleteDir(dirPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Returns true when `dirPath` exists and contains no entries.
+ * Non-existent paths are treated as empty (nothing to delete).
+ *
+ * @param dirPath - Absolute path of the directory to check.
+ */
+export function isDirEmpty(dirPath: string): boolean {
+  try {
+    return fs.readdirSync(dirPath).length === 0;
+  } catch {
+    return true;
+  }
+}
+
 // ── Safe file I/O ─────────────────────────────────────────────────────────────
 
 /**

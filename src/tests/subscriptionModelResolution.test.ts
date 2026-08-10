@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
-import { chooseCodexExecutable, resolveCodexExecutableFromLookup } from '../providers/CodexSdkProvider.js';
+import { buildKnownCodexCandidates, chooseCodexExecutable, resolveCodexExecutableFromLookup } from '../providers/CodexSdkProvider.js';
 
 describe('resolveModelsWithSubscriptionFirst', () => {
   test('uses subscription models before attempting an API key', async () => {
@@ -49,5 +49,24 @@ describe('resolveModelsWithSubscriptionFirst', () => {
 
     expect(first).toBe('C:/Codex/codex.exe');
     expect(second).toBe(first);
+  });
+
+  test('includes known Windows Codex installation locations', () => {
+    const candidates = buildKnownCodexCandidates('win32', {
+      USERPROFILE: 'C:/Users/vil',
+      APPDATA: 'C:/Users/vil/AppData/Roaming',
+    });
+
+    expect(candidates).toContain('C:/Users/vil/AppData/Roaming/npm/codex.cmd');
+    expect(candidates).toContain('C:/Users/vil/AppData/Roaming/npm/codex.exe');
+    expect(candidates).toContain('C:/Users/vil/.vscode/extensions/openai.chatgpt/bin/windows-x86_64/codex.exe');
+  });
+
+  test('includes known Unix Codex installation locations', () => {
+    const candidates = buildKnownCodexCandidates('linux', { HOME: '/home/vil' });
+
+    expect(candidates).toContain('/usr/local/bin/codex');
+    expect(candidates).toContain('/home/vil/.local/bin/codex');
+    expect(candidates).toContain('/home/vil/.vscode/extensions/openai.chatgpt/bin/linux-x86_64/codex');
   });
 });

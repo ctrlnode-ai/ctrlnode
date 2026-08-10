@@ -9,6 +9,9 @@ import { HandlerContext } from './handlerContext.js';
 import { PROVIDERS } from './config.js';
 import {
   handleCreateWorkspace,
+  handleCreateFolder,
+  handleRenameFolder,
+  handleDeleteFolder,
   handleDeleteAgentConfig,
   handleDeleteAgentFolders,
   handleDeletePath,
@@ -64,6 +67,15 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'create_workspace':
       handleCreateWorkspace(msg, ctx);
+      break;
+    case 'create_folder':
+      handleCreateFolder(msg, ctx);
+      break;
+    case 'rename_folder':
+      handleRenameFolder(msg, ctx);
+      break;
+    case 'delete_folder':
+      handleDeleteFolder(msg, ctx);
       break;
     case 'sync_config':
       handleSyncConfig(msg, ctx);

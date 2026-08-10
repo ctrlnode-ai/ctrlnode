@@ -51,9 +51,8 @@ try {
   }
   _dotenvPath = envFile;
   if (!_isLoginCommand) {
-    console.log(`Reading config from: ${envFile}`);
     const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
-    console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
+    logger.info('config_loaded', { path: envFile, command: `${_bin} --setup` });
   }
 } catch { /* no .env file — fine */ }
 
@@ -130,9 +129,11 @@ export function restrictProvidersTo(allowed: Set<string>): void {
 // ── Shared task timeout ───────────────────────────────────────────────────────
 // Inactivity timeout for all providers. Fires only when the agent produces no
 // output for this many minutes — an actively working agent is never killed.
-export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '10', 10);
+export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '30', 10);
 /** Hard limit for a read-only prompt-to-graph proposal. Kept short so an abandoned draft never occupies a local agent. */
-export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '90', 10) || 90);
+export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '300', 10) || 300);
+/** Persist provider-exposed thinking summaries to agent_log.md. Enabled by default for task observability. */
+export const LOG_THINKING = /^true$/i.test(process.env.LOG_THINKING || 'true');
 /** Poll interval for OpenClaw's ephemeral planning session log (sessions_spawn has no synchronous response). */
 export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.env.GRAPH_GENERATION_SESSION_POLL_MS || '400', 10) || 400);
 /**
@@ -140,10 +141,10 @@ export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.en
  * and ClaudeCodeProvider). Both run with allowedTools disabled, so this only bounds
  * self-correction attempts on the JSON response, never a tool-use loop.
  */
-export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '20', 10) || 20);
+export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '50', 10) || 50);
 
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
-export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
+export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '200', 10);
 // Default true: Claude Code prompts for permission even for tools listed in --allowedTools
 // when running non-interactively. Skip-permissions is required so file writes don't hang.
 export const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS !== 'false';
@@ -170,7 +171,7 @@ export let CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
 export let ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 export const CLAUDE_SDK_TOOLS = process.env.CLAUDE_SDK_TOOLS || 'Read,Write,Edit,Bash,Glob,Grep';
-export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '50', 10);
+export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '200', 10);
 /** bypassPermissions | acceptEdits | dontAsk — default bypassPermissions for unattended agents */
 export const CLAUDE_SDK_PERMISSION_MODE = process.env.CLAUDE_SDK_PERMISSION_MODE || 'bypassPermissions';
 /**
@@ -280,6 +281,7 @@ if (!fs.existsSync(agentsRoot)) {
   // Only write when there was no pre-existing .env and user went through the
   // interactive flow (not when all vars were already in env).
   if (!_dotenvPath) {
+    let envPath = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
     try {
       const envLines: string[] = [];
       if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
@@ -291,12 +293,12 @@ if (!fs.existsSync(agentsRoot)) {
       if (envLines.length > 0) {
         const ctrlnodeDir = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode');
         fs.mkdirSync(ctrlnodeDir, { recursive: true });
-        const envPath = path.join(ctrlnodeDir, '.env');
+        envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
-        if (!_isLoginCommand) console.log(`\n  ✓ Configuration saved to ${envPath}`);
+        if (!_isLoginCommand) logger.info('config_saved', { path: envPath });
       }
     } catch (e: any) {
-      if (!_isLoginCommand) console.warn(`  ⚠ Could not save .env: ${e.message}`);
+      if (!_isLoginCommand) logger.warn('config_save_failed', { path: envPath, error: e?.message });
     }
   }
 }
@@ -331,7 +333,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.6';
+export const BRIDGE_VERSION = 'v2026.3.0';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -381,12 +383,12 @@ export async function ensurePairingToken(): Promise<void> {
   if (PAIRING_TOKEN) return;
 
   const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
-  console.log('\nNo PAIRING_TOKEN configured — starting browser sign-in (same as running `ctrlnode login`).\n');
+  logger.info('browser_sign_in_starting');
 
   try {
     await loginAndAdoptPairingToken(envFile);
   } catch (e: any) {
-    console.error(`\nLogin failed: ${e.message}\n`);
+    logger.error('login_failed', { error: e?.message });
     process.exit(1);
   }
 }
@@ -395,19 +397,19 @@ export async function ensurePairingToken(): Promise<void> {
 // failures at dispatch time, not Bridge startup failures.
 if (!_isLoginCommand) {
   if (!ANTHROPIC_API_KEY) {
-    logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
+    logger.debug('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
   } else {
     logger.info('anthropic_api_key_detected', { mode: 'api-key' });
   }
 
   if (!CURSOR_API_KEY) {
-    logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
+    logger.debug('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
   } else {
     logger.info('cursor_api_key_detected', { mode: 'api-key' });
   }
 
   if (!OPENROUTER_API_KEY) {
-    logger.info('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
+    logger.debug('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
   } else {
     logger.info('openrouter_api_key_detected', { mode: 'api-key' });
   }

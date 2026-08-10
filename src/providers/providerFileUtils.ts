@@ -252,6 +252,21 @@ export function createInactivityTimer(
   };
 }
 
+/** Appends one bounded, typed progress entry to the execution log. */
+export function appendTaskProgressLog(taskFolderName: string | undefined, kind: string, text?: string, filePath?: string): void {
+  if (!taskFolderName) return;
+  const taskFullPath = path.join(CTRLNODE_ROOT, taskFolderName);
+  const logFile = path.join(taskFullPath, 'output', resolveCurrentAgentLogFileName(taskFullPath));
+  const detail = (text || filePath || '').slice(0, 8_000);
+  if (!detail) return;
+  try {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `\n[${new Date().toISOString()}] ${kind.toUpperCase()}\n${detail}\n`, 'utf8');
+  } catch (error: any) {
+    logger.warn('task_progress_log_write_failed', { taskFolderName, kind, error: error?.message });
+  }
+}
+
 // ── Combined "done" helper ────────────────────────────────────────────────────
 
 /**

@@ -77,7 +77,7 @@ export function startWatcher(agentId: string, workspaceDir: string, onEvent: Fil
   if (activeWatchers[agentId]) return;
 
   if (!fs.existsSync(workspaceDir)) {
-    logger.warn('workspace_missing', { agentId, workspaceDir });
+    logger.debug('workspace_missing', { agentId, workspaceDir });
   }
 
   const usePolling = WATCHER_USE_POLLING || isMountedVolumeLikely(workspaceDir);

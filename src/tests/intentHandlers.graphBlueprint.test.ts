@@ -47,7 +47,7 @@ describe('handleIntentAction — generate_graph_blueprint', () => {
       agentId,
       prompt: 'Create a daily engineering brief.',
       workingDir: '/tmp/planning-agent',
-      timeoutMs: 90_000,
+      timeoutMs: 300_000,
     }));
     expect(sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
       action: 'intent_result',
@@ -55,6 +55,15 @@ describe('handleIntentAction — generate_graph_blueprint', () => {
       agentId,
       intentType: 'generate_graph_blueprint',
       result: graphJson,
+    }));
+    expect(sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'graph_generation_progress', requestId: 'preview-123', phase: 'accepted', sequence: 1,
+    }));
+    expect(sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'graph_generation_progress', requestId: 'preview-123', phase: 'planning', sequence: 2,
+    }));
+    expect(sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'graph_generation_progress', requestId: 'preview-123', phase: 'completed', sequence: 3,
     }));
     expect(provider.dispatchTask).not.toHaveBeenCalled();
     expect(sendToSaas).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'task_complete' }));

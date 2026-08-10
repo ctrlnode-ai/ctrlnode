@@ -10,8 +10,8 @@
  * Environment:
  *   ANTHROPIC_API_KEY   — required; passed to the SDK process env
  *   CLAUDE_SDK_TOOLS    — comma-separated allowed tools (default: Read,Write,Edit,Bash,Glob,Grep)
- *   CLAUDE_SDK_MAX_TURNS — max agentic turns (default: 20)
- *   TASK_TIMEOUT_MINUTES — hard timeout in minutes (default: 10)
+ *   CLAUDE_SDK_MAX_TURNS — max agentic turns (default: 200)
+ *   TASK_TIMEOUT_MINUTES — hard timeout in minutes (default: 30)
  *   CLAUDE_SDK_PERMISSION_MODE — bypassPermissions | acceptEdits | dontAsk (default: bypassPermissions)
  *   CLAUDE_SDK_MODEL    — model alias/id override (default: inherited from SDK)
  */
@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
@@ -367,6 +367,15 @@ export class ClaudeAgentSdkProvider implements IProvider {
   async isAvailable(): Promise<boolean> {
     if (!CLAUDE_SDK_EXECUTABLE) return false;
     return fs.existsSync(CLAUDE_SDK_EXECUTABLE);
+  }
+
+  async checkHealth(): Promise<ProviderHealth> {
+    if (!await this.isAvailable()) return { available: false, reason: 'binary_missing' };
+    if (ANTHROPIC_API_KEY) return { available: true };
+    const credentialsPath = path.join(process.env.USERPROFILE || process.env.HOME || '', '.claude', '.credentials.json');
+    return fs.existsSync(credentialsPath)
+      ? { available: true }
+      : { available: false, reason: 'auth_required' };
   }
 
   // ── Internal ───────────────────────────────────────────────────────────────

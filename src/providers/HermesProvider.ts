@@ -13,7 +13,7 @@
  *
  * Environment:
  *   HERMES_HOME             — optional path to Hermes home dir (default: ~/.hermes)
- *   TASK_TIMEOUT_MINUTES  — inactivity timeout per task (default: 10)
+ *   TASK_TIMEOUT_MINUTES  — inactivity timeout per task (default: 30)
  *   DEBUG=true              — tails agent.log at DEBUG level for richer tool traces
  *
  * Install: pip install hermes-agent  (requires Python 3.11+)

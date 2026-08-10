@@ -7,6 +7,9 @@ import {
   handleListFiles,
   handleReadFile,
   handleCreateWorkspace,
+  handleCreateFolder,
+  handleRenameFolder,
+  handleDeleteFolder,
 } from '../filesystemConfigHandlers';
 
 let tmpDir: string;
@@ -142,5 +145,112 @@ describe('handleCreateWorkspace', () => {
     }));
     // Folder must NOT be created in cwd
     expect(fs.existsSync(path.join(process.cwd(), 'agents', 'local', 'agent'))).toBe(false);
+  });
+});
+
+// ── handleCreateFolder ───────────────────────────────────────────────────────
+
+describe('handleCreateFolder', () => {
+  test('creates the folder under the resolved base path and acks success', () => {
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleCreateFolder({ action: 'create_folder', requestId: 'r1', useCtrlnode: false, path: 'new-folder' } as any, ctx as any);
+
+    expect(fs.existsSync(path.join(tmpDir, 'new-folder'))).toBe(true);
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'create_folder_ack', requestId: 'r1', success: true, error: null,
+    }));
+  });
+
+  test('acks MISSING_PATH when no path is given', () => {
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleCreateFolder({ action: 'create_folder', requestId: 'r1', useCtrlnode: false } as any, ctx as any);
+
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'create_folder_ack', requestId: 'r1', success: false, error: 'MISSING_PATH',
+    }));
+  });
+
+  test('acks INVALID_PATH and does not escape the base path via traversal', () => {
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleCreateFolder({ action: 'create_folder', requestId: 'r1', useCtrlnode: false, path: '../escaped' } as any, ctx as any);
+
+    expect(fs.existsSync(path.join(path.dirname(tmpDir), 'escaped'))).toBe(false);
+  });
+});
+
+// ── handleRenameFolder ───────────────────────────────────────────────────────
+
+describe('handleRenameFolder', () => {
+  test('renames the folder in place and acks success', () => {
+    fs.mkdirSync(path.join(tmpDir, 'old-name'));
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleRenameFolder({ action: 'rename_folder', requestId: 'r1', useCtrlnode: false, path: 'old-name', newPath: 'new-name' } as any, ctx as any);
+
+    expect(fs.existsSync(path.join(tmpDir, 'old-name'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'new-name'))).toBe(true);
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'rename_folder_ack', requestId: 'r1', success: true, error: null,
+    }));
+  });
+
+  test('acks FOLDER_NOT_FOUND when the source folder does not exist', () => {
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleRenameFolder({ action: 'rename_folder', requestId: 'r1', useCtrlnode: false, path: 'missing', newPath: 'renamed' } as any, ctx as any);
+
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'rename_folder_ack', requestId: 'r1', success: false, error: 'FOLDER_NOT_FOUND',
+    }));
+  });
+});
+
+// ── handleDeleteFolder ───────────────────────────────────────────────────────
+
+describe('handleDeleteFolder', () => {
+  test('deletes an empty folder and acks success', () => {
+    fs.mkdirSync(path.join(tmpDir, 'empty-folder'));
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleDeleteFolder({ action: 'delete_folder', requestId: 'r1', useCtrlnode: false, path: 'empty-folder' } as any, ctx as any);
+
+    expect(fs.existsSync(path.join(tmpDir, 'empty-folder'))).toBe(false);
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'delete_folder_ack', requestId: 'r1', success: true, error: null,
+    }));
+  });
+
+  test('refuses to delete a non-empty folder and leaves it in place', () => {
+    fs.mkdirSync(path.join(tmpDir, 'has-files'));
+    fs.writeFileSync(path.join(tmpDir, 'has-files', 'note.txt'), 'hi', 'utf8');
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleDeleteFolder({ action: 'delete_folder', requestId: 'r1', useCtrlnode: false, path: 'has-files' } as any, ctx as any);
+
+    expect(fs.existsSync(path.join(tmpDir, 'has-files', 'note.txt'))).toBe(true);
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'delete_folder_ack', requestId: 'r1', success: false, error: 'FOLDER_NOT_EMPTY',
+    }));
+  });
+
+  test('acks FOLDER_NOT_FOUND when the folder does not exist', () => {
+    const provider = makeProvider(tmpDir);
+    const ctx = makeCtx(provider);
+
+    handleDeleteFolder({ action: 'delete_folder', requestId: 'r1', useCtrlnode: false, path: 'missing' } as any, ctx as any);
+
+    expect(ctx.sendToSaas).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'delete_folder_ack', requestId: 'r1', success: false, error: 'FOLDER_NOT_FOUND',
+    }));
   });
 });

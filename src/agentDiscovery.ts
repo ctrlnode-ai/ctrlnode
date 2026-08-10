@@ -52,7 +52,7 @@ export function readOpenClawConfig(): any {
   try {
     return JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf8'));
   } catch (err: any) {
-    console.error(`[BRIDGE] Cannot read ${OPENCLAW_CONFIG}: ${err.message}`);
+    logger.error('openclaw_config_read_failed', { path: OPENCLAW_CONFIG, error: err?.message });
     return null;
   }
 }
@@ -73,7 +73,6 @@ export function writeOpenClawConfig(config: any): void {
     });
   } catch (err: any) {
     logger.error('openclaw_config_write_failed', { path: OPENCLAW_CONFIG, error: err?.message });
-    console.error(`[BRIDGE] Failed to write ${OPENCLAW_CONFIG}: ${err.message}`);
   }
 }
 
