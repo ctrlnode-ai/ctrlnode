@@ -5,7 +5,7 @@ import { logger } from './logger.js';
 import { BridgeMessage } from './types.js';
 import { HandlerContext } from './handlerContext.js';
 import { OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT, BASE_PATH } from './config.js';
-import { ensureDir, readFileForBridge, walkDir, listDirShallow, listDirShallowEntries, sanitizeRelPath } from './fileSystem.js';
+import { ensureDir, isDirEmpty, readFileForBridge, walkDir, listDirShallow, listDirShallowEntries, sanitizeRelPath } from './fileSystem.js';
 import { suppressFileChangedForAgentPaths } from './watcher.js';
 import {
   discoveredAgents,
@@ -159,6 +159,114 @@ export async function handleDeletePath(msg: BridgeMessage, ctx: HandlerContext):
   } catch (err: any) {
     logger.warn('delete_path.failed', { agentId: targetId, path: safePath, error: err?.message });
     ctx.sendToSaas({ action: 'delete_path_ack', requestId, success: false, error: err?.message ?? 'DELETE_FAILED' });
+  }
+}
+
+export function handleCreateFolder(msg: BridgeMessage, ctx: HandlerContext): void {
+  const { requestId, path: relPath } = msg;
+  const targetId = resolveTargetAgentId(msg.agentId);
+
+  const basePath = resolveBase(msg, ctx, targetId);
+  if (!relPath) {
+    ctx.sendToSaas({ action: 'create_folder_ack', requestId, success: false, error: 'MISSING_PATH' });
+    return;
+  }
+  if (!basePath) {
+    ctx.sendToSaas({ action: 'create_folder_ack', requestId, success: false, error: 'BASE_PATH_NOT_FOUND' });
+    return;
+  }
+
+  const safePath = sanitizeRelPath(relPath);
+  const fullPath = path.resolve(path.join(basePath, safePath));
+  if (!fullPath.startsWith(path.resolve(basePath))) {
+    ctx.sendToSaas({ action: 'create_folder_ack', requestId, success: false, error: 'INVALID_PATH' });
+    return;
+  }
+
+  try {
+    ensureDir(fullPath);
+    logger.debug('create_folder', { agentId: targetId, path: safePath });
+    ctx.sendToSaas({ action: 'create_folder_ack', requestId, success: true, error: null });
+  } catch (err: any) {
+    ctx.sendToSaas({ action: 'create_folder_ack', requestId, success: false, error: err?.message ?? 'CREATE_FAILED' });
+  }
+}
+
+export function handleRenameFolder(msg: BridgeMessage, ctx: HandlerContext): void {
+  const { requestId, path: relPath, newPath } = msg;
+  const targetId = resolveTargetAgentId(msg.agentId);
+
+  const basePath = resolveBase(msg, ctx, targetId);
+  if (!relPath || !newPath) {
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: false, error: 'MISSING_PATH' });
+    return;
+  }
+  if (!basePath) {
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: false, error: 'BASE_PATH_NOT_FOUND' });
+    return;
+  }
+
+  const resolvedBase = path.resolve(basePath);
+  const fromPath = path.resolve(path.join(basePath, sanitizeRelPath(relPath)));
+  const toPath = path.resolve(path.join(basePath, sanitizeRelPath(newPath)));
+  if (!fromPath.startsWith(resolvedBase) || !toPath.startsWith(resolvedBase)) {
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: false, error: 'INVALID_PATH' });
+    return;
+  }
+
+  if (!fs.existsSync(fromPath) || !fs.statSync(fromPath).isDirectory()) {
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: false, error: 'FOLDER_NOT_FOUND' });
+    return;
+  }
+
+  try {
+    ensureDir(path.dirname(toPath));
+    fs.renameSync(fromPath, toPath);
+    logger.debug('rename_folder', { agentId: targetId, path: relPath, newPath });
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: true, error: null });
+  } catch (err: any) {
+    ctx.sendToSaas({ action: 'rename_folder_ack', requestId, success: false, error: err?.message ?? 'RENAME_FAILED' });
+  }
+}
+
+/** Deletes a folder only when it is empty — refuses with FOLDER_NOT_EMPTY otherwise (no recursive delete here). */
+export function handleDeleteFolder(msg: BridgeMessage, ctx: HandlerContext): void {
+  const { requestId, path: relPath } = msg;
+  const targetId = resolveTargetAgentId(msg.agentId);
+
+  const basePath = resolveBase(msg, ctx, targetId);
+  if (!relPath) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: 'MISSING_PATH' });
+    return;
+  }
+  if (!basePath) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: 'BASE_PATH_NOT_FOUND' });
+    return;
+  }
+
+  const safePath = sanitizeRelPath(relPath);
+  const fullPath = path.resolve(path.join(basePath, safePath));
+  if (!fullPath.startsWith(path.resolve(basePath))) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: 'INVALID_PATH' });
+    return;
+  }
+
+  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isDirectory()) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: 'FOLDER_NOT_FOUND' });
+    return;
+  }
+
+  if (!isDirEmpty(fullPath)) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: 'FOLDER_NOT_EMPTY' });
+    return;
+  }
+
+  try {
+    fs.rmdirSync(fullPath);
+    logger.debug('delete_folder', { agentId: targetId, path: safePath });
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: true, error: null });
+  } catch (err: any) {
+    ctx.sendToSaas({ action: 'delete_folder_ack', requestId, success: false, error: err?.message ?? 'DELETE_FAILED' });
   }
 }
 

@@ -45,5 +45,10 @@ describe('CodexSdkProvider.generateStructuredPlan', () => {
       type: 'object',
       required: expect.arrayContaining(['name', 'schedule', 'nodes']),
     }));
+    expect(turnOptions.outputSchema.properties.schedule.required).toEqual([
+      'kind', 'time', 'days', 'hours', 'timezone', 'cron',
+    ]);
+    expect(turnOptions.outputSchema.required).toEqual(expect.arrayContaining(['agentMode', 'agents']));
+    expect(turnOptions.outputSchema.properties.nodes.items.required).toEqual(expect.arrayContaining(['agentKey']));
   });
 });

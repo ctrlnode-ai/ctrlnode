@@ -20,6 +20,11 @@ function reportTaskProgress(ctx: HandlerContext, taskId: string | undefined, age
   ctx.sendToSaas({ action: 'task_progress', taskId, agentId, kind, text: kind === 'thinking' && !LOG_THINKING ? undefined : text, path, timestamp: new Date().toISOString() });
 }
 
+function reportGraphGenerationProgress(ctx: HandlerContext, requestId: string | undefined, agentId: string | undefined, phase: string, sequence: number, message: string): void {
+  if (!requestId || !agentId) return;
+  ctx.sendToSaas({ action: 'graph_generation_progress', requestId, agentId, phase, sequence, message, timestamp: new Date().toISOString() });
+}
+
 /**
  * Main entry point for action-based intents from SaaS.
  * For dispatch_task, delegates to ctx.provider.dispatchTask() so that different
@@ -46,6 +51,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
 
   // ── generate_graph_blueprint: read-only structured planning ──────────────────
   if (intentType === 'generate_graph_blueprint') {
+    reportGraphGenerationProgress(ctx, requestId, targetId, 'accepted', 1, 'Request received by Bridge.');
     const prompt = parsedArgs?.prompt || content || '';
     if (!prompt) {
       ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'MISSING_INTENT_PAYLOAD' });
@@ -58,12 +64,14 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
 
     try {
       logger.info('graph_generation.started', { agentId: targetId, provider: ctx.provider.providerName });
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'planning', 2, 'Planning workflow structure and instructions.');
       const result = await ctx.provider.generateStructuredPlan({
         agentId: targetId!,
         prompt,
         workingDir: agentInfo.workspace,
         timeoutMs: GRAPH_GENERATION_TIMEOUT_SECONDS * 1_000,
       });
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'completed', 3, 'Graph proposal is ready for validation.');
       ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, result });
       logger.info('graph_generation.completed', { agentId: targetId, provider: ctx.provider.providerName, responseLength: result.length });
     } catch (err: any) {
@@ -74,6 +82,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
       const errorCode = /\b(?:timed?\s*out|abort(?:ed)?)\b/i.test(errorMessage)
         ? 'GRAPH_GENERATION_TIMEOUT'
         : errorMessage;
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'failed', 3, 'Graph generation could not be completed.');
       ctx.sendToSaas({
         action: 'intent_result',
         requestId,

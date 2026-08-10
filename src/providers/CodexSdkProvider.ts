@@ -133,7 +133,7 @@ async function fetchOpenAiModels(): Promise<string[]> {
 const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'description', 'topology', 'templateFamily', 'schedule', 'nodes'],
+  required: ['name', 'description', 'topology', 'templateFamily', 'schedule', 'agentMode', 'agents', 'nodes'],
   properties: {
     name: { type: 'string' },
     description: { type: 'string' },
@@ -142,14 +142,29 @@ const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
     schedule: {
       type: 'object',
       additionalProperties: false,
-      required: ['kind'],
+      required: ['kind', 'time', 'days', 'hours', 'timezone', 'cron'],
       properties: {
         kind: { type: 'string', enum: ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'custom'] },
-        time: { type: 'string' },
-        days: { type: 'array', items: { type: 'integer' } },
-        hours: { type: 'array', items: { type: 'integer' } },
-        timezone: { type: 'string' },
-        cron: { type: 'string' },
+        time: { type: ['string', 'null'] },
+        days: { type: ['array', 'null'], items: { type: 'integer' } },
+        hours: { type: ['array', 'null'], items: { type: 'integer' } },
+        timezone: { type: ['string', 'null'] },
+        cron: { type: ['string', 'null'] },
+      },
+    },
+    agentMode: { type: 'string', enum: ['single', 'multi'] },
+    agents: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'name', 'role', 'instructions'],
+        properties: {
+          key: { type: 'string' },
+          name: { type: 'string' },
+          role: { type: 'string' },
+          instructions: { type: 'string' },
+        },
       },
     },
     nodes: {
@@ -157,7 +172,7 @@ const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'label', 'instructions', 'taskMode', 'focusFiles', 'outputFolder', 'dependsOn'],
+        required: ['key', 'label', 'instructions', 'taskMode', 'focusFiles', 'outputFolder', 'dependsOn', 'agentKey'],
         properties: {
           key: { type: 'string' },
           label: { type: 'string' },
@@ -166,6 +181,7 @@ const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
           focusFiles: { type: 'array', items: { type: 'string' } },
           outputFolder: { type: 'string' },
           dependsOn: { type: 'array', items: { type: 'string' } },
+          agentKey: { type: ['string', 'null'] },
         },
       },
     },
@@ -240,8 +256,13 @@ export class CodexSdkProvider implements IProvider {
     });
 
     try {
+      const codexBinPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
+      logger.info('codex_sdk.graph_generation_config', {
+        agentId: params.agentId,
+        codexBinPath: codexBinPath ?? '(not found on PATH)',
+      });
       const codex = new Codex({
-        ...(process.env.CODEX_BIN_PATH ? { codexPathOverride: process.env.CODEX_BIN_PATH } : {}),
+        ...(codexBinPath ? { codexPathOverride: codexBinPath } : {}),
         env: codexEnv,
       });
       const thread = codex.startThread({
@@ -306,11 +327,13 @@ export class CodexSdkProvider implements IProvider {
 
   async isAvailable(): Promise<boolean> {
     const resolvedPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
-    logger.info('codex_sdk.health_check', {
+    const health = {
       available: Boolean(resolvedPath),
       platform: process.platform,
       resolvedPath: resolvedPath ?? '(not found)',
-    });
+    };
+    if (resolvedPath) logger.debug('codex_sdk.health_check', health);
+    else logger.warn('codex_sdk.health_check', health);
     return Boolean(resolvedPath);
   }
 

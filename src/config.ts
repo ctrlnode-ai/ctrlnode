@@ -51,9 +51,8 @@ try {
   }
   _dotenvPath = envFile;
   if (!_isLoginCommand) {
-    console.log(`Reading config from: ${envFile}`);
     const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
-    console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
+    logger.info('config_loaded', { path: envFile, command: `${_bin} --setup` });
   }
 } catch { /* no .env file — fine */ }
 
@@ -282,6 +281,7 @@ if (!fs.existsSync(agentsRoot)) {
   // Only write when there was no pre-existing .env and user went through the
   // interactive flow (not when all vars were already in env).
   if (!_dotenvPath) {
+    let envPath = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
     try {
       const envLines: string[] = [];
       if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
@@ -293,12 +293,12 @@ if (!fs.existsSync(agentsRoot)) {
       if (envLines.length > 0) {
         const ctrlnodeDir = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode');
         fs.mkdirSync(ctrlnodeDir, { recursive: true });
-        const envPath = path.join(ctrlnodeDir, '.env');
+        envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
-        if (!_isLoginCommand) console.log(`\n  ✓ Configuration saved to ${envPath}`);
+        if (!_isLoginCommand) logger.info('config_saved', { path: envPath });
       }
     } catch (e: any) {
-      if (!_isLoginCommand) console.warn(`  ⚠ Could not save .env: ${e.message}`);
+      if (!_isLoginCommand) logger.warn('config_save_failed', { path: envPath, error: e?.message });
     }
   }
 }
@@ -383,12 +383,12 @@ export async function ensurePairingToken(): Promise<void> {
   if (PAIRING_TOKEN) return;
 
   const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
-  console.log('\nNo PAIRING_TOKEN configured — starting browser sign-in (same as running `ctrlnode login`).\n');
+  logger.info('browser_sign_in_starting');
 
   try {
     await loginAndAdoptPairingToken(envFile);
   } catch (e: any) {
-    console.error(`\nLogin failed: ${e.message}\n`);
+    logger.error('login_failed', { error: e?.message });
     process.exit(1);
   }
 }
@@ -397,19 +397,19 @@ export async function ensurePairingToken(): Promise<void> {
 // failures at dispatch time, not Bridge startup failures.
 if (!_isLoginCommand) {
   if (!ANTHROPIC_API_KEY) {
-    logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
+    logger.debug('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
   } else {
     logger.info('anthropic_api_key_detected', { mode: 'api-key' });
   }
 
   if (!CURSOR_API_KEY) {
-    logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
+    logger.debug('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
   } else {
     logger.info('cursor_api_key_detected', { mode: 'api-key' });
   }
 
   if (!OPENROUTER_API_KEY) {
-    logger.info('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
+    logger.debug('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
   } else {
     logger.info('openrouter_api_key_detected', { mode: 'api-key' });
   }

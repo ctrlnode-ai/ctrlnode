@@ -330,9 +330,7 @@ const AUTH_RETRY_MS = 30_000;
  */
 function retryOnAuthFailure(detail: string): void {
   logger.error('auth_failed', { detail, retrySeconds: AUTH_RETRY_MS / 1000 });
-  console.error('AUTHENTICATION FAILED');
-  console.error(detail);
-  console.error(`Retrying in ${AUTH_RETRY_MS / 1000}s — update PAIRING_TOKEN and restart if this persists.`);
+  logger.warn('auth_retry_scheduled', { retrySeconds: AUTH_RETRY_MS / 1000, message: 'Update PAIRING_TOKEN and restart if this persists.' });
   reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, AUTH_RETRY_MS);
 }
 
