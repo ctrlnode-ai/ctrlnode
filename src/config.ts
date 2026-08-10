@@ -333,7 +333,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.6';
+export const BRIDGE_VERSION = 'v2026.3.0';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 

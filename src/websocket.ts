@@ -152,7 +152,7 @@ async function checkAndSendProviderHealth(isFirstCheck: boolean): Promise<void> 
     if (hasChanges) {
       lastProviderHealth = { ...health };
       const unhealthy = Object.entries(health).filter(([, v]) => !v.available).map(([k]) => k);
-      logger.info('provider_health_sent', {
+      logger.debug('provider_health_sent', {
         delta: Object.keys(delta).join(',') || 'none',
         unhealthy: unhealthy.join(',') || 'none',
       });

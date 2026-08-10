@@ -24,14 +24,15 @@ Install the open-source Bridge on your laptop, server, or CI machine. It makes o
 
 ---
 
-## What changed in v2026.2.6
+## What changed in v2026.3.0
 
-- **OpenRouter** — use your own `OPENROUTER_API_KEY` and pay only for usage.
-- **Ollama** — run local models with no API key.
-- **`ctrlnode login`** — authorize the Bridge in your browser; the pairing token is saved automatically.
-- **Reliable follow-ups** — every execution has its own activity log and keeps earlier context.
+- **Codex improvements** — automatic installation discovery and multi-agent workflow plans.
+- **Provider health** — clearer status and faster authentication error reporting.
+- **Live progress** — task activity and graph-generation progress in CtrlNode.
+- **Workspace folders** — create, rename, and delete empty folders safely.
+- **Better logs** — human-readable output by default, with JSON and debug modes available.
 
-See the full [v2026.2.6 release notes](Releases/v2026.2.6/Release-notes-v2026.2.6.md).
+See the full [v2026.3.0 release notes](Releases/v2026.3.0/Release-notes-v2026.3.0.md).
 
 ---
 
@@ -91,9 +92,16 @@ A **Graph** is the visual execution model in CtrlNode. Add agent nodes, connect 
 
 ---
 
+## Kanban — ship tasks like a product team
+
+![Kanban board](assets/kanban.png)
+
+Write a task, assign an agent, and drop it on the board. CTRL NODE automatically moves it through **BACKLOG → INBOX → ACTIVE → DONE** as the Bridge dispatches it to your agents and they report back in real time.
+
+---
+
 ## Also included
 
-- **Tasks and Kanban** — run ad hoc work and track it from backlog to done.
 - **Routines** — schedule recurring agent work.
 - **Live activity** — watch output as each agent runs.
 - **Files and memory** — give agents the local context they need.
@@ -107,13 +115,13 @@ A **Graph** is the visual execution model in CtrlNode. Add agent nodes, connect 
 **Linux / macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
+curl -fsSL https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.sh | bash
 ```
 
 **Windows PowerShell**
 
 ```powershell
-irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1 | iex
+irm https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.ps1 | iex
 ```
 
 Or [download a binary from Releases](https://github.com/ctrlnode-ai/ctrlnode/releases).
