@@ -110,6 +110,18 @@ export interface BridgeMessage {
   shallowIncludeFiles?: boolean;
   /** With `useBasePath`, recursively walk the tree (files + dirs) for zip/download listing. */
   recursive?: boolean;
+  /** Repository-relative file to diff, for git_diff. */
+  filePath?: string;
+  /** With `git_diff`, the file is untracked and must be diffed against an empty blob. */
+  untracked?: boolean;
+  /** Which git operation to run: init | commit | fetch | pull | push | checkout | create_branch. */
+  operation?: string;
+  /** Commit message for `git_operation` with operation=commit. */
+  message?: string;
+  /** Target branch name for `git_operation` with operation=checkout or create_branch. */
+  branch?: string;
+  /** Branch to create `branch` from, for operation=create_branch. Defaults to the current HEAD. */
+  baseBranch?: string;
   /** When `base64`, `content` is decoded to bytes before writing; otherwise UTF-8 text. */
   contentEncoding?: 'utf8' | 'base64';
   /** Folder name or path for single-folder operations such as create_workspace or delete_agent_folders. */

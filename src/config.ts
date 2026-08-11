@@ -9,17 +9,19 @@ import fs from 'fs';
 import { logger } from './logger.js';
 import { resolveOpenClawConfigPath } from './configResolution.js';
 import { isLoginCommand } from './cliMode.js';
+export { BRIDGE_VERSION } from './bridgeVersion.js';
 
-// Login should start with a clean authorization prompt. Config is still loaded
-// so login can resolve the same environment, but its normal startup diagnostics
-// are not useful until the Bridge actually starts.
+// Suppress normal startup diagnostics if config.ts is imported while testing or
+// extending the standalone login command.
 const _isLoginCommand = isLoginCommand(process.argv);
 
-// ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
+// ── Load .env — canonical user config first, then legacy locations ─────────────
 function _findDotenv(): string | null {
-  // Prefer the installer path (~/.ctrlnode/.env) over cwd/.env so a stray
-  // .env in the Bridge repo does not override the user's workspace config.
+  // BASE_PATH describes the accessible workspace; configuration itself always
+  // lives under the user's home directory. Remaining candidates are read-only
+  // compatibility fallbacks for installations created before v2026.3.0.
   const candidates = [
+    path.join(os.homedir(), '.ctrlnode', '.env'),
     path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env'),
     path.join(process.cwd(), '.env'),
     path.join(os.homedir(), '.env'),
@@ -281,7 +283,7 @@ if (!fs.existsSync(agentsRoot)) {
   // Only write when there was no pre-existing .env and user went through the
   // interactive flow (not when all vars were already in env).
   if (!_dotenvPath) {
-    let envPath = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
+    let envPath = path.join(os.homedir(), '.ctrlnode', '.env');
     try {
       const envLines: string[] = [];
       if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
@@ -291,7 +293,7 @@ if (!fs.existsSync(agentsRoot)) {
       if (process.env.OPENCLAW_GATEWAY_TOKEN) envLines.push(`OPENCLAW_GATEWAY_TOKEN=${process.env.OPENCLAW_GATEWAY_TOKEN}`);
       if (process.env.OPENCLAW_HOME) envLines.push(`OPENCLAW_HOME=${process.env.OPENCLAW_HOME}`);
       if (envLines.length > 0) {
-        const ctrlnodeDir = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode');
+        const ctrlnodeDir = path.join(os.homedir(), '.ctrlnode');
         fs.mkdirSync(ctrlnodeDir, { recursive: true });
         envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
@@ -333,7 +335,6 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.3.0';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -360,8 +361,7 @@ if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
  * so the rest of this run picks it up without a restart.
  *
  * `runLoginFn` defaults to the real login.ts flow, dynamically imported to avoid a
- * circular import (login.ts imports config.ts for BRIDGE_VERSION/SAAS_URL) — tests
- * inject a stub instead of relying on module mocking.
+ * circular imports; tests inject a stub instead of relying on module mocking.
  */
 export async function loginAndAdoptPairingToken(
   envFile: string,
@@ -382,7 +382,7 @@ export async function loginAndAdoptPairingToken(
 export async function ensurePairingToken(): Promise<void> {
   if (PAIRING_TOKEN) return;
 
-  const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
+  const envFile = _dotenvPath ?? path.join(os.homedir(), '.ctrlnode', '.env');
   logger.info('browser_sign_in_starting');
 
   try {

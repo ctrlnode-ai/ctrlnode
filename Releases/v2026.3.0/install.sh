@@ -28,42 +28,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-DEFAULT_WORKSPACE="$HOME"
-WORKSPACE_ROOT=""
-
 echo ""
 echo "CtrlNode Bridge Installer"
 echo "--------------------------"
 echo ""
 
 # --- workspace directory ---
-echo "Where is your workspace?"
-echo "  This is the root folder where ctrlnode will read and write files."
-echo "  For security, the bridge cannot access anything outside this folder."
-echo "  If you are a developer, point this to your source code root (e.g. ~/code)."
-if [ -t 1 ] && [ -e /dev/tty ]; then
-  printf "Workspace [%s]: " "$DEFAULT_WORKSPACE" > /dev/tty
-  read -r ws_answer < /dev/tty
-  WORKSPACE_ROOT="${ws_answer:-$DEFAULT_WORKSPACE}"
-else
-  WORKSPACE_ROOT="$DEFAULT_WORKSPACE"
-fi
-echo "  Workspace: $WORKSPACE_ROOT"
-echo "  Tip: to change it later, set BASE_PATH and restart ctrlnode."
-echo ""
-
-# Persist workspace
+# Shell RC is used only when the installer needs to add ~/.local/bin to PATH.
 SHELL_RC=""
 if [ -f "$HOME/.bashrc" ]; then SHELL_RC="$HOME/.bashrc"
 elif [ -f "$HOME/.zshrc" ]; then SHELL_RC="$HOME/.zshrc"
 elif [ -f "$HOME/.profile" ]; then SHELL_RC="$HOME/.profile"
 fi
-
-if [ -n "$SHELL_RC" ]; then
-  grep -v 'BASE_PATH' "$SHELL_RC" > "${SHELL_RC}.tmp" && mv "${SHELL_RC}.tmp" "$SHELL_RC"
-  echo "export BASE_PATH=\"$WORKSPACE_ROOT\"" >> "$SHELL_RC"
-fi
-export BASE_PATH="$WORKSPACE_ROOT"
 
 # --- detect OS and arch ---
 OS="$(uname -s)"
@@ -200,7 +176,6 @@ else
   echo "  ctrlnode"
 fi
 echo ""
-echo "Workspace: $WORKSPACE_ROOT"
 echo "When you run the Bridge for the first time, run 'ctrlnode login' to authorize it in your browser."
 echo "Full setup (login + API keys):  ctrlnode --setup"
 echo ""
@@ -218,7 +193,7 @@ if [ -t 1 ] && [ -e /dev/tty ]; then
       # Redirect stdin from /dev/tty so ctrlnode's readline reads from the
       # terminal, not the curl pipe. Without this, readline captures the
       # prompt text itself as the answer and saves a corrupted PAIRING_TOKEN.
-      BASE_PATH="$WORKSPACE_ROOT" "$DEST" < /dev/tty
+      "$DEST" < /dev/tty
       ;;
   esac
 fi

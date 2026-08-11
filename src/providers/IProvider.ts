@@ -1,4 +1,5 @@
 import { AgentSummary } from '../types.js';
+import type { DiscoverCapabilitiesParams, ProviderCapabilities } from './capabilities/types.js';
 
 export interface DispatchTaskParams {
   agentId: string;
@@ -104,4 +105,13 @@ export interface IProvider {
   isAvailable?(): Promise<boolean>;
   /** Rich live health used by Bridge status reporting. */
   checkHealth?(): Promise<ProviderHealth>;
+
+  /**
+   * Optional: read-only catalogue of user-invocable skills for the task INSTRUCTIONS slash menu.
+   *
+   * Must never execute skill content, start MCP servers, or return secrets — see
+   * capabilities/types.ts. Providers without an implementation fall back to the stateless
+   * adapter registry, and then to an empty `unsupported` catalogue.
+   */
+  discoverCapabilities?(params: DiscoverCapabilitiesParams): Promise<ProviderCapabilities>;
 }

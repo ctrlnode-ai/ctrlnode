@@ -3,22 +3,12 @@
  * @description Entry point for the CtrlNode.ai Agent Bridge.
  */
 
-// BUILD_TIME is injected at compile time via --define BUILD_TIME="..."
-declare const BUILD_TIME: string;
-const _buildTime = typeof BUILD_TIME !== 'undefined' ? BUILD_TIME : 'dev';
 const _isLoginCommand = (await import('./cliMode.js')).isLoginCommand(process.argv);
-
-// config.ts MUST be the first import — it validates env vars and exits
-// with a user-friendly message if required files are missing.
-const { PROVIDERS, ensurePairingToken, BRIDGE_VERSION, restrictProvidersTo } = await import('./config.js');
-
-if (!_isLoginCommand) {
-  console.log(`\nCTRLNODE Bridge ${BRIDGE_VERSION}  built ${_buildTime}\n`);
-}
+const _isSetupCommand = process.argv.includes('--setup');
 
 // --setup: run interactive wizard and exit before loading anything else.
 // Must be checked before any other imports so config.ts side-effects don't run.
-if (process.argv.includes('--setup')) {
+if (_isSetupCommand) {
   const { runSetup } = await import('./setup.js');
   await runSetup();
   process.exit(0);
@@ -36,6 +26,31 @@ if (_isLoginCommand) {
     process.exit(1);
   }
 }
+
+// Resolve and persist the workspace before config.ts reads BASE_PATH. Interactive
+// launches ask whenever the current directory differs; services keep the saved path.
+const { canonicalBridgeEnvPath, runWorkspaceTrustPreflight } = await import('./workspaceTrust.js');
+await runWorkspaceTrustPreflight();
+
+const {
+  BASE_PATH,
+  BRIDGE_VERSION,
+  DOTENV_PATH,
+  PROVIDERS,
+  ensurePairingToken,
+  restrictProvidersTo,
+} = await import('./config.js');
+const { renderWelcomePanel, supportsTerminalColor } = await import('./terminalPanels.js');
+for (const line of renderWelcomePanel({
+  workspace: BASE_PATH,
+  configPath: DOTENV_PATH ?? canonicalBridgeEnvPath(),
+  providerCount: PROVIDERS.length,
+  version: BRIDGE_VERSION,
+  boxed: Boolean(process.stdout.isTTY),
+  color: supportsTerminalColor(),
+  columns: process.stdout.columns,
+})) console.log(line);
+console.log('');
 
 const { createProviders } = await import('./providers/factory.js');
 const { MultiProvider } = await import('./providers/MultiProvider.js');
