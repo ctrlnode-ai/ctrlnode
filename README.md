@@ -9,7 +9,7 @@
 ### Control and run AI agent graphs from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2026.2.6-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
+[![Release](https://img.shields.io/badge/release-v2026.3.1-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
 [![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square)](https://ctrlnode.ai)
 
 [Website](https://ctrlnode.ai) · [App](https://app.ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases)
@@ -24,15 +24,15 @@ Install the open-source Bridge on your laptop, server, or CI machine. It makes o
 
 ---
 
-## What changed in v2026.3.0
+## What changed in v2026.3.1
 
-- **Codex improvements** — automatic installation discovery and multi-agent workflow plans.
-- **Provider health** — clearer status and faster authentication error reporting.
-- **Live progress** — task activity and graph-generation progress in CtrlNode.
-- **Workspace folders** — create, rename, and delete empty folders safely.
-- **Better logs** — human-readable output by default, with JSON and debug modes available.
+- **Git workspace support** — inspect repository status and diffs, and request guarded Git operations from the Bridge.
+- **Provider capabilities** — discover provider skills and capability catalogues in the task workflow.
+- **Safer workspace startup** — confirm the current directory, persist the canonical workspace config, and migrate legacy `.ctrlnode` settings.
+- **More resilient execution** — longer task and graph-generation budgets, plus broader Codex executable discovery.
+- **Clearer CLI feedback** — human-readable logs by default, JSON output with `LOG_FORMAT=json`, redaction of sensitive values, and richer startup panels.
 
-See the full [v2026.3.0 release notes](Releases/v2026.3.0/Release-notes-v2026.3.0.md).
+See the full [v2026.3.1 release notes](Releases/v2026.3.1/Release-notes-v2026.3.1.md).
 
 ---
 
