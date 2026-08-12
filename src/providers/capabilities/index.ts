@@ -18,6 +18,7 @@ import {
 } from './types.js';
 
 export * from './types.js';
+export * from './capabilityCache.js';
 
 /**
  * Adapters that need no provider instance. `claude-sdk` is absent on purpose: it needs the

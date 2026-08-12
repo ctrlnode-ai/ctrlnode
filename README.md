@@ -28,10 +28,8 @@ Install the open-source Bridge on your laptop, server, or CI machine. It makes o
 
 - **Git workspace support** — inspect repository status and diffs, and request guarded Git operations from the Bridge.
 - **Provider capabilities** — discover provider skills and capability catalogues in the task workflow.
-- **Safer workspace startup** — confirm the current directory, persist the canonical workspace config, and migrate legacy `.ctrlnode` settings.
-- **More resilient execution** — longer task and graph-generation budgets, plus broader Codex executable discovery.
-- **Clearer CLI feedback** — human-readable logs by default, JSON output with `LOG_FORMAT=json`, redaction of sensitive values, and richer startup panels.
-
+- **Friendlier terminal experience** — a startup welcome panel shows your workspace, config, provider, and version, with keyboard navigation for the trust prompt.  
+ 
 See the full [v2026.3.1 release notes](Releases/v2026.3.1/Release-notes-v2026.3.1.md).
 
 ---

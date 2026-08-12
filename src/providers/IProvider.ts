@@ -38,6 +38,10 @@ export interface SendToSessionParams {
   executionId?: string;
   /** CtrlNode-relative folder for the task (e.g. tasks/proyecto/06-25/uuid-slug). Bridge uses it to number followup files. */
   taskFolderName?: string;
+  /** Original task execution context, preserved for follow-up prompts. */
+  taskMode?: string;
+  repoPath?: string;
+  focusFiles?: string[];
 }
 
 export interface GenerateStructuredPlanParams {

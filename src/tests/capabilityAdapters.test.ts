@@ -87,6 +87,51 @@ describe('codex capabilities', () => {
     expect(buildCodexSkillDirectories(makeTempDir(), codexHome))
       .toContain(path.join(codexHome, 'skills'));
   });
+
+  test('discovers user skills from HOME/.agents/skills', () => {
+    const userHome = makeTempDir();
+    writeSkill(
+      path.join(userHome, '.agents', 'skills'),
+      'service-logging',
+      '---\nname: service-logging\ndescription: Add service logs\n---\n',
+    );
+
+    const skills = discoverCodexSkills(makeTempDir(), undefined, userHome);
+
+    expect(skills.find((skill) => skill.name === 'service-logging')).toMatchObject({
+      invocation: '$service-logging',
+      scope: 'user',
+    });
+  });
+
+  test('discovers bundled skills below CODEX_HOME/skills/.system', () => {
+    const codexHome = makeTempDir();
+    writeSkill(
+      path.join(codexHome, 'skills', '.system'),
+      'skill-creator',
+      '---\nname: skill-creator\ndescription: Create a Codex skill\n---\n',
+    );
+
+    const skills = discoverCodexSkills(makeTempDir(), codexHome);
+
+    expect(skills.find((skill) => skill.name === 'skill-creator')).toMatchObject({
+      invocation: '$skill-creator',
+      scope: 'builtin',
+    });
+  });
+
+  test('does not advertise project skills in OUTPUT mode', () => {
+    const workingDirectory = makeTempDir();
+    writeSkill(
+      path.join(workingDirectory, '.agents', 'skills'),
+      'project-only',
+      '---\nname: project-only\ndescription: Project workflow\n---\n',
+    );
+
+    const skills = discoverCodexSkills(workingDirectory, undefined, undefined, false);
+
+    expect(skills.some((skill) => skill.name === 'project-only')).toBe(false);
+  });
 });
 
 describe('copilot capabilities', () => {

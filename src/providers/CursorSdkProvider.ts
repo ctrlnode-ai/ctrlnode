@@ -62,6 +62,12 @@ function ensureSqlite3NextToRunner(runnerDir: string): void {
   if (realSqlite3) {
     if (!fs.existsSync(path.join(pkgDir, 'build', 'Release', 'node_sqlite3.node'))) {
       _copySqlite3Package(realSqlite3, pkgDir);
+      // The real package's lib/sqlite3-binding.js does `require('bindings')(...)`, but only
+      // sqlite3 itself is copied here — the `bindings` package isn't, so that require fails
+      // with MODULE_NOT_FOUND at runtime. Overwrite with the embedded variant that requires
+      // the .node file by relative path directly, matching what _extractSqlite3Binding uses.
+      const bindingShim = SQLITE3_JS_FILES['lib/sqlite3-binding.js'];
+      if (bindingShim) fs.writeFileSync(path.join(pkgDir, 'lib', 'sqlite3-binding.js'), bindingShim, 'utf8');
       logger.info('cursor_sdk.sqlite3_copied', { from: realSqlite3 });
     }
     return;

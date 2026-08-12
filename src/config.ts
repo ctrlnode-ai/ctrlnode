@@ -336,7 +336,7 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
-export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export const MAX_INLINE_PDF_BYTES = 15 * 1024 * 1024;
 

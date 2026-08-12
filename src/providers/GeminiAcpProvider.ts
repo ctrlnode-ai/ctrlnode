@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -118,6 +118,17 @@ export class GeminiAcpProvider implements IProvider {
   async isAvailable(): Promise<boolean> {
     const { checkBinaryExists } = await import('./providerHealthUtils.js');
     return checkBinaryExists('gemini');
+  }
+
+  /**
+   * `isAvailable()` only ever returns false when `gemini --version` fails with ENOENT — there
+   * is no other failure mode in `checkBinaryExists`. Without this, MultiProvider's generic
+   * fallback reports `service_unreachable`, which reads as a network/process problem even
+   * though the real and only cause is that the CLI isn't on PATH.
+   */
+  async checkHealth(): Promise<ProviderHealth> {
+    const available = await this.isAvailable();
+    return available ? { available } : { available, reason: 'binary_missing' };
   }
 
   async listModels(): Promise<string[]> {

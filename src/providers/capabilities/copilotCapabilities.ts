@@ -10,6 +10,7 @@ import { logger } from '../../logger.js';
 import { CliRunner, defaultCliRunner, extractCatalogueArray } from './cliCatalogue.js';
 import { sanitizeSkills } from './skillScanner.js';
 import {
+  CAPABILITY_SESSION_DISCOVERY_TIMEOUT_MS,
   DiscoverCapabilitiesParams,
   DiscoveredSkill,
   ProviderCapabilities,
@@ -61,7 +62,15 @@ export function discoverCopilotCapabilities(
 ): ProviderCapabilities {
   const base = emptyCapabilities('copilot', params, 'live');
 
-  const result = runCli('copilot', ['skill', 'list', '--json'], params.workingDirectory);
+  // Like the Claude CLI, `copilot.cmd` pays a cold-start cost on Windows (shell shim + own
+  // init) that the generic 5s catalogue budget doesn't cover — it was timing out and reporting
+  // an empty catalogue even though `copilot skill list --json` succeeds moments later.
+  const result = runCli(
+    'copilot',
+    ['skill', 'list', '--json'],
+    params.workingDirectory,
+    CAPABILITY_SESSION_DISCOVERY_TIMEOUT_MS,
+  );
   if (!result.ok) {
     logger.debug('capabilities.copilot.cli_failed', { reason: result.reason });
     base.discovery.skills = 'unsupported';

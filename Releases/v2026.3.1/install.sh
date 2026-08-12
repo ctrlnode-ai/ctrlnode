@@ -197,4 +197,3 @@ if [ -t 1 ] && [ -e /dev/tty ]; then
       ;;
   esac
 fi
-

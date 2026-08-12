@@ -99,7 +99,7 @@ export async function discoverClaudeCapabilities(
 
     base.skills = sanitizeSkills(mapClaudeSlashCommands(commands as ClaudeSlashCommandLike[]));
     writeCapabilityCache(cacheKey, base);
-    logger.info('capabilities.claude.discovered', {
+    logger.debug('capabilities.claude.discovered', {
       agentId: params.agentId,
       count: base.skills.length,
       elapsedMs: Date.now() - startedAt,

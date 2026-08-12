@@ -361,7 +361,7 @@ export interface FollowupFileResult {
   followupInputFile: string;
   /** CtrlNode-relative output path the agent should write to (e.g. tasks/.../output/ea94c3f8-followup-2-output.md) */
   followupOutputRel: string;
-  /** Instruction block to inject into the agent prompt (output file instruction only) */
+  /** Instruction block to inject into the agent prompt (context + output file guidance) */
   followupLogBlock: string;
   /** Same as followupLogBlock but also includes the full prior agent-log history (every execution's log, in order) as context */
   followupLogBlockWithHistory: string;
@@ -371,18 +371,72 @@ export interface FollowupFileResult {
   followupBaseName: string;
 }
 
+export interface FollowupContextOptions {
+  taskMode?: string;
+  repoPath?: string;
+  focusFiles?: string[];
+}
+
+/**
+ * Re-states the durable task context for a follow-up turn. Native sessions keep
+ * their history, but stateless providers and recovered sessions still need the
+ * same repository/input guidance that the initial task template contained.
+ */
+export function buildFollowupContextBlock(
+  taskFolderAbs: string,
+  options: FollowupContextOptions = {},
+): string {
+  const inputPath = path.join(taskFolderAbs, 'input');
+  const lines = [
+    '## Original task context',
+    '',
+    'This is a continuation of the existing task, not a standalone request. Before acting, review the original task instructions and the context already attached to it. Preserve its constraints and use the previous work as context.',
+    '',
+    `Original task input and context files are under: \`${inputPath}\``,
+    'Read the original task input and any relevant files from that folder before responding.',
+  ];
+
+  if (options.taskMode === 'repo' && options.repoPath?.trim()) {
+    lines.push(
+      '',
+      '## Repository context',
+      '',
+      `Continue working in the same project work directory: \`${options.repoPath.trim()}\``,
+      'Use the full work directory as context; do not treat this follow-up as an output-only task.',
+    );
+
+    const focusFiles = (options.focusFiles ?? []).filter((value) => value.trim());
+    if (focusFiles.length > 0) {
+      lines.push(
+        '',
+        'Start by reviewing these prioritized files or folders:',
+        ...focusFiles.map((value) => `- \`${value.trim()}\``),
+        '',
+        'You still have access to the full work directory and may explore beyond these paths when needed.',
+      );
+    }
+  }
+
+  lines.push(
+    '',
+    'If this follow-up contains @ file or folder references, inspect those references before completing the request.',
+  );
+  return lines.join('\n');
+}
+
 /**
  * Writes the followup input file to disk and returns naming info.
  * Called by intentHandlers before dispatching to any provider so all providers
  * get consistent followup file handling without duplicating this logic.
  *
- * `followupLogBlock`            — output-file instruction only (for providers with native session resume)
+ * `followupLogBlock`            — task-context + output-file instructions (for providers with native session resume)
  * `followupLogBlockWithHistory` — same + full prior agent-log history prepended (for stateless providers)
  */
 export function prepareFollowupFiles(
   taskId: string,
   message: string,
   taskFolderName: string | undefined,
+  context: FollowupContextOptions = {},
 ): FollowupFileResult {
   const taskFolderAbs = taskFolderName
     ? path.join(CTRLNODE_ROOT, taskFolderName)
@@ -416,7 +470,8 @@ export function prepareFollowupFiles(
     logger.warn('followup_files.input_write_failed', { taskId, error: e?.message });
   }
 
-  const followupLogBlock = `## Follow-up output file\n\nWrite your follow-up result to this file using the Write tool:\n\`${followupOutputRel}\``;
+  const followupContextBlock = buildFollowupContextBlock(taskFolderAbs, context);
+  const followupLogBlock = `${followupContextBlock}\n\n## Follow-up output file\n\nWrite your follow-up result to this file using the Write tool:\n\`${followupOutputRel}\``;
 
   let followupLogBlockWithHistory = followupLogBlock;
   if (priorHistory) {

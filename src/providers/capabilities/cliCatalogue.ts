@@ -19,9 +19,9 @@ export interface CliCatalogueResult {
   reason?: 'binary_missing' | 'timeout' | 'nonzero_exit';
 }
 
-export type CliRunner = (command: string, args: string[], cwd: string) => CliCatalogueResult;
+export type CliRunner = (command: string, args: string[], cwd: string, timeoutMs?: number) => CliCatalogueResult;
 
-export const defaultCliRunner: CliRunner = (command, args, cwd) => {
+export const defaultCliRunner: CliRunner = (command, args, cwd, timeoutMs = CAPABILITY_DISCOVERY_TIMEOUT_MS) => {
   // Windows resolves .cmd shims only through the shell, matching buildAcpSpawnCommand.
   const isWindows = process.platform === 'win32';
   const spawnCommand = isWindows ? 'cmd.exe' : command;
@@ -30,7 +30,7 @@ export const defaultCliRunner: CliRunner = (command, args, cwd) => {
   const result = spawnSync(spawnCommand, spawnArgs, {
     cwd,
     encoding: 'utf8',
-    timeout: CAPABILITY_DISCOVERY_TIMEOUT_MS,
+    timeout: timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
