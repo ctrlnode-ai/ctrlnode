@@ -1,13 +1,14 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
-import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES } from '../config.js';
+import { CLAUDE_TOOLS, CLAUDE_MAX_TURNS, CLAUDE_SKIP_PERMISSIONS, CTRLNODE_ROOT, resolveProjectHome, TASK_TIMEOUT_MINUTES, GRAPH_GENERATION_MAX_TURNS } from '../config.js';
 import { discoveredAgents } from '../agentDiscovery.js';
 import { logger } from '../logger.js';
-import { augmentPromptForRepoMode, resolveRepoDispatchSpawn } from './repoDispatchContext.js';
-import { createInactivityTimer } from './providerFileUtils.js';
+import { augmentPromptForRepoMode, resolveRepoDispatchSpawn, resolveTaskPaths } from './repoDispatchContext.js';
+import { createInactivityTimer, isStaleSessionError, buildStaleSessionRecoveryPrompt, resolveCurrentAgentLogFileName } from './providerFileUtils.js';
+import { ClaudePlannerTextCollector } from '../graphBlueprintPlanner.js';
 
 
 /**
@@ -122,21 +123,89 @@ export class ClaudeCodeProvider implements IProvider {
   }
 
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
-    const { taskId, message, agentId } = params;
+    const { taskId, message, agentId, taskFolderName } = params;
     const prevSessionId = this.sessionCache.get(taskId);
     const agentInfo = discoveredAgents[agentId];
     const agentModel = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
 
-    const taskFolder = path.join(CTRLNODE_ROOT, 'tasks', taskId);
+    // Output/log/CLAUDE.md must live in the task's REAL folder (same one the initial
+    // run used and the one prepareFollowupFiles() writes the followup input file
+    // into), not the taskId-keyed folder.
+    const { taskFolder } = resolveTaskPaths(taskFolderName, taskId);
     const outputFolder = path.join(taskFolder, 'output');
     fs.mkdirSync(outputFolder, { recursive: true });
 
-    const providerTasksRoot = resolveProjectHome(undefined);
+    const providerTasksRoot = resolveProjectHome(taskFolderName);
     const taskSlug = path.basename(taskFolder);
     const relativeOutputFolder = path.relative(providerTasksRoot, outputFolder).replace(/\\/g, '/');
     writeAgentsMd(taskFolder, agentInfo?.role, agentInfo?.description, relativeOutputFolder, taskSlug, taskId);
     fs.mkdirSync(providerTasksRoot, { recursive: true });
-    await this._spawnClaude({ taskId, cwd: providerTasksRoot, prompt: message, resumeSessionId: prevSessionId, model: agentModel, outputFolder, callbacks });
+    await this._spawnClaude({ taskId, cwd: providerTasksRoot, prompt: message, resumeSessionId: prevSessionId, addDir: taskFolder, model: agentModel, outputFolder, callbacks });
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const model = agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined;
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const args = [
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      // Read-only guarantee: no tools available to the model during graph-blueprint
+      // generation (see management/docs/08-04-ai-graph-generation-plan) — it can
+      // only read the prompt and respond with JSON, never write files or run
+      // commands. GRAPH_GENERATION_MAX_TURNS is generous purely to give the model
+      // room to self-correct its JSON response, not to allow a tool-use loop.
+      '--allowedTools', '',
+      '--max-turns', String(GRAPH_GENERATION_MAX_TURNS),
+      '--no-session-persistence',
+      ...(model ? ['--model', model] : []),
+      '-p', params.prompt,
+    ];
+    const [spawnBin, spawnArgs] = process.platform === 'win32'
+      ? (['cmd.exe', ['/c', 'claude.cmd', ...args]] as const)
+      : (['claude', args] as const);
+
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn(spawnBin, [...spawnArgs], {
+        cwd,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+      const collector = new ClaudePlannerTextCollector();
+      let stderr = '';
+      let lineBuffer = '';
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM');
+        reject(new Error('GRAPH_GENERATION_TIMEOUT'));
+      }, params.timeoutMs);
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        lineBuffer += chunk.toString();
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() ?? '';
+        for (const line of lines) {
+          try { collector.add(JSON.parse(line)); } catch { /* ignore non-protocol output */ }
+        }
+      });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      proc.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      proc.on('close', (code) => {
+        clearTimeout(timeout);
+        const result = collector.text.trim();
+        if (code !== 0) {
+          reject(new Error(stderr.trim().slice(0, 512) || `GRAPH_GENERATION_PROVIDER_EXIT_${code}`));
+        } else if (!result) {
+          reject(new Error('GRAPH_GENERATION_EMPTY_RESPONSE'));
+        } else {
+          resolve(result);
+        }
+      });
+    });
   }
 
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
@@ -185,7 +254,13 @@ export class ClaudeCodeProvider implements IProvider {
   async listModels(): Promise<string[]> {
     const { fetchAnthropicModels } = await import('./providerFileUtils.js');
     const { ANTHROPIC_API_KEY } = await import('../config.js');
-    return fetchAnthropicModels(ANTHROPIC_API_KEY);
+    const { resolveModelsWithSubscriptionFirst } = await import('../subscriptionModelResolution.js');
+    const { getKnownModels } = await import('../modelManifest.js');
+    const credentialsPath = path.join(process.env.USERPROFILE || process.env.HOME || '', '.claude', '.credentials.json');
+    return resolveModelsWithSubscriptionFirst(
+      async () => fs.existsSync(credentialsPath) ? getKnownModels('claude') : [],
+      () => fetchAnthropicModels(ANTHROPIC_API_KEY),
+    );
   }
 
   async isAvailable(): Promise<boolean> {
@@ -209,11 +284,19 @@ export class ClaudeCodeProvider implements IProvider {
     model?: string;
     outputFolder?: string;
     callbacks: TaskCallbacks;
+    /** Internal: set on the retry attempt after a stale-session recovery, to prevent infinite retry loops. */
+    isSessionRecoveryRetry?: boolean;
   }): Promise<void> {
-    const { taskId, cwd, prompt, stdinContent, addDir, resumeSessionId, model, outputFolder, callbacks } = opts;
+    const { taskId, cwd, prompt, stdinContent, addDir, resumeSessionId, model, outputFolder, callbacks, isSessionRecoveryRetry } = opts;
 
-    // Prepare agent_log.md path — messages are appended as they stream in
-    const agentLogPath = outputFolder ? path.join(outputFolder, 'agent_log.md') : null;
+    // Prepare this execution's agent log path — messages are appended as they stream
+    // in. Named agent_log.md for the initial run or agent_log.followup-N.md for
+    // followup N (see resolveCurrentAgentLogFileName), so each execution keeps its
+    // own log instead of every followup overwriting the initial run's log.
+    const taskFolderAbsForLog = outputFolder ? path.dirname(outputFolder) : null;
+    const agentLogPath = outputFolder
+      ? path.join(outputFolder, resolveCurrentAgentLogFileName(taskFolderAbsForLog!))
+      : null;
     if (agentLogPath && !fs.existsSync(agentLogPath)) {
       fs.writeFileSync(agentLogPath, `# Agent log\n\n`, 'utf-8');
     }
@@ -414,15 +497,26 @@ export class ClaudeCodeProvider implements IProvider {
 
         if (timer.fired) {
           callbacks.onComplete('blocked', `Task timed out after ${TASK_TIMEOUT_MINUTES} minutes`);
+          resolve();
         } else if (code === 0) {
           callbacks.onComplete('completed');
+          resolve();
+        } else if (resumeSessionId && !isSessionRecoveryRetry && isStaleSessionError(stderrBuf)) {
+          logger.warn('claude_provider.session_recovery', { taskId, staleSessionId: resumeSessionId });
+          this.sessionCache.delete(taskId);
+          const recoveryPrompt = buildStaleSessionRecoveryPrompt(taskFolderAbsForLog ?? '', prompt);
+          this._spawnClaude({
+            ...opts,
+            prompt: recoveryPrompt,
+            resumeSessionId: undefined,
+            isSessionRecoveryRetry: true,
+          }).then(resolve);
         } else {
           const reason = stderrBuf.slice(0, 512) || `exit code ${code}`;
           logger.warn('claude_provider.exit_nonzero', { taskId, code, stderr: stderrBuf.slice(0, 512) });
           callbacks.onComplete('failed', reason);
+          resolve();
         }
-
-        resolve();
       });
 
       proc.on('error', (err) => {

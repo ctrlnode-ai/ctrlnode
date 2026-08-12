@@ -8,12 +8,20 @@ import os from 'os';
 import fs from 'fs';
 import { logger } from './logger.js';
 import { resolveOpenClawConfigPath } from './configResolution.js';
+import { isLoginCommand } from './cliMode.js';
+export { BRIDGE_VERSION } from './bridgeVersion.js';
 
-// ── Load .env — search order: cwd, .ctrlnode data dir, then home dir ────────────
+// Suppress normal startup diagnostics if config.ts is imported while testing or
+// extending the standalone login command.
+const _isLoginCommand = isLoginCommand(process.argv);
+
+// ── Load .env — canonical user config first, then legacy locations ─────────────
 function _findDotenv(): string | null {
-  // Prefer the installer path (~/.ctrlnode/.env) over cwd/.env so a stray
-  // .env in the Bridge repo does not override the user's workspace config.
+  // BASE_PATH describes the accessible workspace; configuration itself always
+  // lives under the user's home directory. Remaining candidates are read-only
+  // compatibility fallbacks for installations created before v2026.3.0.
   const candidates = [
+    path.join(os.homedir(), '.ctrlnode', '.env'),
     path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env'),
     path.join(process.cwd(), '.env'),
     path.join(os.homedir(), '.env'),
@@ -44,9 +52,10 @@ try {
     process.env[key] = val;
   }
   _dotenvPath = envFile;
-  console.log(`Reading config from: ${envFile}`);
-  const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
-  console.log(`Run '${_bin} --setup' to reconfigure, or edit the file above.\n`);
+  if (!_isLoginCommand) {
+    const _bin = path.basename(process.execPath || process.argv[1] || 'ctrlnode');
+    logger.info('config_loaded', { path: envFile, command: `${_bin} --setup` });
+  }
 } catch { /* no .env file — fine */ }
 
 // ── Linux TLS: ensure the npm ws package can find CA certificates ─────────────
@@ -99,19 +108,45 @@ export const WATCHER_POLL_INTERVAL = parseInt(process.env.WATCHER_POLL_INTERVAL 
 // Internal constant — all providers are always loaded.
 // The server drives agent→provider routing via sync_*_agents messages.
 
-export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes'];
+export let PROVIDERS: string[] = ['openclaw', 'claude', 'claude-sdk', 'copilot', 'gemini', 'codex', 'cursor', 'hermes', 'ollama'];
 
 export let PROVIDER = PROVIDERS[0];
+
+/**
+ * Narrows PROVIDERS down to the intersection with `allowed` (never adds anything back
+ * that credential/config gating already removed above). Called from index.ts after
+ * fetching the canonical provider list from GET /api/agent-types, so a Bridge build
+ * never tries to construct a provider name the backend doesn't currently recognize
+ * (e.g. a renamed/removed provider on an old Bridge build talking to a newer backend,
+ * or vice versa). If that fetch fails, this is simply never called and every provider
+ * this Bridge build knows about — and is credentialed for — stays active.
+ */
+export function restrictProvidersTo(allowed: Set<string>): void {
+  PROVIDERS = PROVIDERS.filter(p => allowed.has(p));
+  PROVIDER = PROVIDERS[0];
+}
 
 // ── Claude Code provider ──────────────────────────────────────────────────────
 
 // ── Shared task timeout ───────────────────────────────────────────────────────
 // Inactivity timeout for all providers. Fires only when the agent produces no
 // output for this many minutes — an actively working agent is never killed.
-export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '10', 10);
+export const TASK_TIMEOUT_MINUTES = parseInt(process.env.TASK_TIMEOUT_MINUTES || '30', 10);
+/** Hard limit for a read-only prompt-to-graph proposal. Kept short so an abandoned draft never occupies a local agent. */
+export const GRAPH_GENERATION_TIMEOUT_SECONDS = Math.max(5, parseInt(process.env.GRAPH_GENERATION_TIMEOUT_SECONDS || '300', 10) || 300);
+/** Persist provider-exposed thinking summaries to agent_log.md. Enabled by default for task observability. */
+export const LOG_THINKING = /^true$/i.test(process.env.LOG_THINKING || 'true');
+/** Poll interval for OpenClaw's ephemeral planning session log (sessions_spawn has no synchronous response). */
+export const GRAPH_GENERATION_SESSION_POLL_MS = Math.max(50, parseInt(process.env.GRAPH_GENERATION_SESSION_POLL_MS || '400', 10) || 400);
+/**
+ * Turn budget for Claude's read-only graph-blueprint planner call (ClaudeAgentSdkProvider
+ * and ClaudeCodeProvider). Both run with allowedTools disabled, so this only bounds
+ * self-correction attempts on the JSON response, never a tool-use loop.
+ */
+export const GRAPH_GENERATION_MAX_TURNS = Math.max(1, parseInt(process.env.GRAPH_GENERATION_MAX_TURNS || '50', 10) || 50);
 
 export const CLAUDE_TOOLS = process.env.CLAUDE_TOOLS || 'Read,Write,Edit';
-export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '20', 10);
+export const CLAUDE_MAX_TURNS = parseInt(process.env.CLAUDE_MAX_TURNS || '200', 10);
 // Default true: Claude Code prompts for permission even for tools listed in --allowedTools
 // when running non-interactively. Skip-permissions is required so file writes don't hang.
 export const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS !== 'false';
@@ -138,7 +173,7 @@ export let CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
 export let ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 export const CLAUDE_SDK_TOOLS = process.env.CLAUDE_SDK_TOOLS || 'Read,Write,Edit,Bash,Glob,Grep';
-export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '50', 10);
+export const CLAUDE_SDK_MAX_TURNS = parseInt(process.env.CLAUDE_SDK_MAX_TURNS || '200', 10);
 /** bypassPermissions | acceptEdits | dontAsk — default bypassPermissions for unattended agents */
 export const CLAUDE_SDK_PERMISSION_MODE = process.env.CLAUDE_SDK_PERMISSION_MODE || 'bypassPermissions';
 /**
@@ -173,6 +208,57 @@ export const CLAUDE_SDK_EXECUTABLE = (() => {
 export const HERMES_HOME = process.env.HERMES_HOME || '';
 // HERMES_USE_ACP=false forces hermes chat -Q -q (CLI) instead of hermes acp
 
+// ── OpenRouter provider ────────────────────────────────────────────────────────
+// Provider name: "openrouter" — REST API directa (sin SDK/subprocess), pay-as-you-go.
+// BYOK local: la clave la trae el propio usuario (ctrlnode --setup o .env a mano),
+// igual que CURSOR_API_KEY / ANTHROPIC_API_KEY. Sin backend, sin provisioning central.
+
+export let OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+export const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api'; // sin /v1 — ver nota en providerFileUtils
+export const OPENROUTER_DEFAULT_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || 'anthropic/claude-sonnet-4.5';
+export const OPENROUTER_ALLOWED_MODELS = (process.env.OPENROUTER_ALLOWED_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+export const OPENROUTER_MAX_TURNS = parseInt(process.env.OPENROUTER_MAX_TURNS || '20', 10);
+export const OPENROUTER_MAX_TOKENS_PER_TURN = parseInt(process.env.OPENROUTER_MAX_TOKENS_PER_TURN || '8000', 10);
+
+// ── Ollama provider ────────────────────────────────────────────────────────────
+// Provider name: "ollama" — 100% local, no API key. Always registered, like every
+// other provider — same principle as the base PROVIDERS list above: the Bridge loads
+// all providers unconditionally, and which one actually handles a task is decided
+// per-agent (by that agent's configured provider/type), not by a Bridge-wide flag.
+// If Ollama isn't installed/running on this machine, isAvailable()/dispatch simply
+// report that clearly instead of silently succeeding — no need to gate registration.
+/**
+ * Normalizes a raw OLLAMA_HOST env value into a fetch()-able base URL.
+ *
+ * OLLAMA_HOST is commonly set system-wide as a bind address for the Ollama SERVER
+ * (e.g. "0.0.0.0" or "0.0.0.0:11434", meaning "listen on all interfaces") rather than
+ * a client-facing URL. Used as-is, fetch() throws "URL is invalid" for a bare host —
+ * or, for "0.0.0.0" specifically, that's a valid-looking URL that silently never
+ * connects (0.0.0.0 isn't a real client-reachable address). Both cases previously
+ * made isAvailable() return false forever with no visible error (the fetch failure
+ * was swallowed by isAvailable()'s catch block), even with Ollama actually running.
+ */
+export function normalizeOllamaHost(raw: string | undefined): string {
+  if (!raw || !raw.trim()) return 'http://localhost:11434';
+  let value = raw.trim();
+  if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
+  try {
+    const url = new URL(value);
+    if (url.hostname === '0.0.0.0') url.hostname = 'localhost';
+    if (!url.port) url.port = '11434';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return 'http://localhost:11434';
+  }
+}
+
+export const OLLAMA_HOST = normalizeOllamaHost(process.env.OLLAMA_HOST);
+export const OLLAMA_DEFAULT_MODEL = process.env.OLLAMA_DEFAULT_MODEL || '';
+export const OLLAMA_ALLOWED_MODELS = (process.env.OLLAMA_ALLOWED_MODELS || '').split(',').map(s => s.trim()).filter(Boolean);
+export const OLLAMA_MAX_TURNS = parseInt(process.env.OLLAMA_MAX_TURNS || '20', 10);
+export const OLLAMA_NUM_CTX = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10); // critical — Ollama truncates context silently otherwise
+export const OLLAMA_TASK_TIMEOUT_MINUTES = parseInt(process.env.OLLAMA_TASK_TIMEOUT_MINUTES || '25', 10); // more generous than TASK_TIMEOUT_MINUTES — CPU-only inference can be slow
+
 // ── Copilot ACP provider ──────────────────────────────────────────────────────
 
 
@@ -188,15 +274,16 @@ const agentsRoot = path.join(BASE_PATH, '.ctrlnode');
 if (!fs.existsSync(agentsRoot)) {
   try {
     fs.mkdirSync(agentsRoot, { recursive: true });
-    logger.debug(`Bootstrap: Created missing agents root at ${agentsRoot}`);
+    if (!_isLoginCommand) logger.debug(`Bootstrap: Created missing agents root at ${agentsRoot}`);
   } catch (err) {
-    logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
+    if (!_isLoginCommand) logger.warn(`Bootstrap: Could not create agents root at ${agentsRoot}. Providers may fail if write access is denied.`);
   }
 
   // ── Save interactive answers to .env so next run skips prompts ──────────────
   // Only write when there was no pre-existing .env and user went through the
   // interactive flow (not when all vars were already in env).
   if (!_dotenvPath) {
+    let envPath = path.join(os.homedir(), '.ctrlnode', '.env');
     try {
       const envLines: string[] = [];
       if (PAIRING_TOKEN) envLines.push(`PAIRING_TOKEN=${PAIRING_TOKEN}`);
@@ -206,14 +293,14 @@ if (!fs.existsSync(agentsRoot)) {
       if (process.env.OPENCLAW_GATEWAY_TOKEN) envLines.push(`OPENCLAW_GATEWAY_TOKEN=${process.env.OPENCLAW_GATEWAY_TOKEN}`);
       if (process.env.OPENCLAW_HOME) envLines.push(`OPENCLAW_HOME=${process.env.OPENCLAW_HOME}`);
       if (envLines.length > 0) {
-        const ctrlnodeDir = path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode');
+        const ctrlnodeDir = path.join(os.homedir(), '.ctrlnode');
         fs.mkdirSync(ctrlnodeDir, { recursive: true });
-        const envPath = path.join(ctrlnodeDir, '.env');
+        envPath = path.join(ctrlnodeDir, '.env');
         fs.writeFileSync(envPath, envLines.join('\n') + '\n', 'utf8');
-        console.log(`\n  ✓ Configuration saved to ${envPath}`);
+        if (!_isLoginCommand) logger.info('config_saved', { path: envPath });
       }
     } catch (e: any) {
-      console.warn(`  ⚠ Could not save .env: ${e.message}`);
+      if (!_isLoginCommand) logger.warn('config_save_failed', { path: envPath, error: e?.message });
     }
   }
 }
@@ -222,8 +309,9 @@ if (!fs.existsSync(agentsRoot)) {
 // process.env may have been mutated by the TTY block above; refresh exported lets.
 ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || ANTHROPIC_API_KEY;
 CURSOR_API_KEY         = process.env.CURSOR_API_KEY         || CURSOR_API_KEY;
+OPENROUTER_API_KEY     = process.env.OPENROUTER_API_KEY     || OPENROUTER_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
-BASE_PATH = process.env.BASE_PATH || BASE_PATH;
+BASE_PATH              = process.env.BASE_PATH              || BASE_PATH;
 
 export let CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
 
@@ -247,20 +335,20 @@ export function resolveProjectHome(taskFolderName: string | undefined): string {
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
-export const BRIDGE_VERSION = 'v2026.2.5';
 export const SESSION_INACTIVITY_TIMEOUT_MINUTES = parseInt(process.env.SESSION_INACTIVITY_TIMEOUT_MINUTES || '5', 10);
-export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export const MAX_INLINE_PDF_BYTES = 15 * 1024 * 1024;
 
 export const DOTENV_PATH: string | null = _dotenvPath;
 
 // ── Refresh exported vars from process.env (loaded from .env or shell) ────────
-ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY    || ANTHROPIC_API_KEY;
-CURSOR_API_KEY       = process.env.CURSOR_API_KEY       || CURSOR_API_KEY;
+ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || ANTHROPIC_API_KEY;
+CURSOR_API_KEY         = process.env.CURSOR_API_KEY         || CURSOR_API_KEY;
+OPENROUTER_API_KEY     = process.env.OPENROUTER_API_KEY     || OPENROUTER_API_KEY;
 OPENCLAW_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
-BASE_PATH     = process.env.BASE_PATH || BASE_PATH;
-CTRLNODE_ROOT = path.join(BASE_PATH, '.ctrlnode');
+BASE_PATH              = process.env.BASE_PATH              || BASE_PATH;
+CTRLNODE_ROOT          = path.join(BASE_PATH, '.ctrlnode');
 
 
 if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
@@ -268,56 +356,64 @@ if (!PAIRING_TOKEN && (process.env.BUN_TEST || process.env.TEST)) {
 }
 
 /**
- * If PAIRING_TOKEN is missing, prompts the user interactively and persists
- * the token to the .env file. Must be called from index.ts before connect().
+ * Runs the same browser device-login flow as `ctrlnode login` (see login.ts) and
+ * adopts the resulting token into both the in-memory PAIRING_TOKEN and process.env
+ * so the rest of this run picks it up without a restart.
+ *
+ * `runLoginFn` defaults to the real login.ts flow, dynamically imported to avoid a
+ * circular imports; tests inject a stub instead of relying on module mocking.
+ */
+export async function loginAndAdoptPairingToken(
+  envFile: string,
+  runLoginFn: (envFile: string) => Promise<string> = async (f) => (await import('./login.js')).runLogin(f),
+): Promise<string> {
+  const token = await runLoginFn(envFile);
+  PAIRING_TOKEN = token;
+  process.env.PAIRING_TOKEN = token;
+  return token;
+}
+
+/**
+ * If PAIRING_TOKEN is missing, runs the browser sign-in flow (same as `ctrlnode
+ * login`) and persists the token to the .env file. Must be called from index.ts
+ * before connect(). Works the same whether the Bridge runs on this machine or a
+ * headless one — the printed URL/code can be approved from any device's browser.
  */
 export async function ensurePairingToken(): Promise<void> {
   if (PAIRING_TOKEN) return;
 
-  const envFile = _dotenvPath ?? path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
-  const { createInterface } = await import('readline');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const token = await new Promise<string>(resolve => {
-    rl.question('\nPAIRING_TOKEN not found. Enter your pairing token (Settings → Bridge at app.ctrlnode.ai): ', answer => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-
-  if (!token) {
-    console.error('No token entered. Exiting.');
-    process.exit(1);
-  }
-
-  PAIRING_TOKEN = token;
-  process.env.PAIRING_TOKEN = token;
+  const envFile = _dotenvPath ?? path.join(os.homedir(), '.ctrlnode', '.env');
+  logger.info('browser_sign_in_starting');
 
   try {
-    fs.mkdirSync(path.dirname(envFile), { recursive: true });
-    const existing = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
-    if (!existing.includes('PAIRING_TOKEN')) {
-      fs.appendFileSync(envFile, `\nPAIRING_TOKEN=${token}\n`, 'utf8');
-      console.log(`Token saved to ${envFile}\n`);
-    }
+    await loginAndAdoptPairingToken(envFile);
   } catch (e: any) {
-    logger.warn('pairing_token_persist_failed', { error: e?.message });
+    logger.error('login_failed', { error: e?.message });
+    process.exit(1);
   }
 }
 
 // Startup credential diagnostics — informational only; missing keys cause task
 // failures at dispatch time, not Bridge startup failures.
-if (!ANTHROPIC_API_KEY) {
-  logger.info('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
-} else {
-  logger.info('anthropic_api_key_detected', { mode: 'api-key' });
-}
+if (!_isLoginCommand) {
+  if (!ANTHROPIC_API_KEY) {
+    logger.debug('anthropic_api_key_not_set', { note: 'Claude SDK agents will use subscription mode or fail at dispatch.' });
+  } else {
+    logger.info('anthropic_api_key_detected', { mode: 'api-key' });
+  }
 
-if (!CURSOR_API_KEY) {
-  logger.info('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
-} else {
-  logger.info('cursor_api_key_detected', { mode: 'api-key' });
-}
+  if (!CURSOR_API_KEY) {
+    logger.debug('cursor_api_key_not_set', { note: 'Cursor agents will fail at dispatch if a key is required.' });
+  } else {
+    logger.info('cursor_api_key_detected', { mode: 'api-key' });
+  }
 
+  if (!OPENROUTER_API_KEY) {
+    logger.debug('openrouter_api_key_not_set', { note: 'OpenRouter agents will fail at dispatch if a key is required.' });
+  } else {
+    logger.info('openrouter_api_key_detected', { mode: 'api-key' });
+  }
+}
 
 // ── Resolve OPENCLAW_CONFIG ───────────────────────────────────────────────────
 
@@ -330,7 +426,9 @@ export function refreshOpenClawConfig(): string {
   });
 
   OPENCLAW_CONFIG = resolvedConfig.path;
-  logger.debug('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
+  if (!_isLoginCommand) {
+    logger.debug('config_path_resolved', { path: OPENCLAW_CONFIG, source: resolvedConfig.source });
+  }
   return OPENCLAW_CONFIG;
 }
 
@@ -338,13 +436,24 @@ export function refreshOpenClawConfig(): string {
 // the active PROVIDERS list so the factory skips it instead of crashing.
 refreshOpenClawConfig();
 if (!fs.existsSync(OPENCLAW_CONFIG)) {
-  logger.info('openclaw_config_not_found', {
-    path: OPENCLAW_CONFIG,
-    note: 'OpenClaw provider disabled. Set OPENCLAW_HOME or ensure ~/.openclaw/openclaw.json exists to enable it.',
-  });
+  if (!_isLoginCommand) {
+    logger.info('openclaw_config_not_found', {
+      path: OPENCLAW_CONFIG,
+      note: 'OpenClaw provider disabled. Set OPENCLAW_HOME or ensure ~/.openclaw/openclaw.json exists to enable it.',
+    });
+  }
   PROVIDERS = PROVIDERS.filter(p => p !== 'openclaw');
   PROVIDER = PROVIDERS[0];
 }
+
+// Auto-enable OpenRouter provider if API key is set
+if (OPENROUTER_API_KEY) {
+  PROVIDERS.push('openrouter');
+}
+
+// Ollama needs no opt-in flag or key — it's already in the base PROVIDERS list above
+// (see the comment there). Nothing to do here; kept as a marker for where the old
+// OLLAMA_ENABLED gate used to live, in case a future provider needs one instead.
 
 export const ctrlnodePath = path.join(path.dirname(OPENCLAW_CONFIG || path.join(os.homedir(), '.openclaw', 'openclaw.json')), 'ctrlnode');
 

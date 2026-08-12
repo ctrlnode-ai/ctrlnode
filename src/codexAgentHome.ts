@@ -13,11 +13,56 @@ import path from 'path';
 import { CTRLNODE_ROOT } from './config.js';
 import { logger } from './logger.js';
 
+export function getKnownCodexHomeCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const home = env.USERPROFILE || env.HOME || '';
+  const slash = (...parts: string[]) => parts.filter(Boolean).join('/').replace(/\\+/g, '/');
+  const candidates = [slash(home, '.codex')];
+  if (env.XDG_CONFIG_HOME) candidates.push(slash(env.XDG_CONFIG_HOME, 'codex'));
+  if (platform === 'win32' && env.APPDATA) candidates.push(slash(env.APPDATA, '.codex'));
+  return candidates;
+}
+
+export function resolveCodexHome(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  exists: (candidate: string) => boolean = fs.existsSync,
+): string | undefined {
+  if (env.CODEX_HOME?.trim()) return env.CODEX_HOME.trim();
+  return getKnownCodexHomeCandidates(platform, env).find(exists);
+}
+
 /**
  * Returns the per-agent CODEX_HOME path: {CTRLNODE_ROOT}/.codex-agents/{agentId}/
  */
 export function getCodexAgentHome(agentId: string): string {
   return path.join(CTRLNODE_ROOT, '.codex-agents', agentId);
+}
+
+/**
+ * Copies the shared Codex login cache into an isolated agent home.
+ *
+ * Codex CLI reads ChatGPT subscription credentials from auth.json under
+ * CODEX_HOME. Agent homes are intentionally separate for sessions/config, so
+ * they must receive the shared login cache before the CLI is spawned.
+ */
+export function syncCodexAuthToAgentHome(agentHome: string, sharedHome: string | undefined): boolean {
+  if (!sharedHome) return false;
+
+  const source = path.join(sharedHome, 'auth.json');
+  if (!fs.existsSync(source)) return false;
+
+  try {
+    fs.mkdirSync(agentHome, { recursive: true });
+    fs.copyFileSync(source, path.join(agentHome, 'auth.json'));
+    logger.debug('codex_agent_home.auth_synced', { agentHome });
+    return true;
+  } catch (e) {
+    logger.warn('codex_agent_home.auth_sync_failed', { agentHome, err: String(e) });
+    return false;
+  }
 }
 
 /**
@@ -32,10 +77,13 @@ export function setupCodexAgentHome(agentId: string, agentDescription: string): 
     fs.writeFileSync(path.join(agentHome, 'AGENTS.md'), agentDescription, 'utf8');
 
     // Copy shared config.toml when available (e.g. openrouter provider config).
-    const sharedConfig = process.env.CODEX_HOME ? path.join(process.env.CODEX_HOME, 'config.toml') : null;
+    const codexHome = resolveCodexHome();
+    const sharedConfig = codexHome ? path.join(codexHome, 'config.toml') : null;
     if (sharedConfig && fs.existsSync(sharedConfig)) {
       fs.copyFileSync(sharedConfig, path.join(agentHome, 'config.toml'));
     }
+
+    syncCodexAuthToAgentHome(agentHome, codexHome);
 
     // Ensure the ctrlnode root workspace is trusted so Codex CLI permits workspace-write sandbox.
     // Also set [windows] sandbox = "unelevated" — without it Codex ignores --sandbox workspace-write

@@ -4,9 +4,26 @@ import { HandlerContext } from './handlerContext.js';
 import { discoveredAgents, agentStatuses } from './agentDiscovery.js';
 import { resolveTargetAgentId } from './agentRouting.js';
 import { getIntentProviderMethod } from './intentDispatchPolicy.js';
-import { setAgentRunning } from './websocket.js';
+import { reportProviderHealth, setAgentRunning } from './websocket.js';
 import { handleInvokeTool } from './openclawInvoker.js';
 import { prepareFollowupFiles } from './providers/providerFileUtils.js';
+import { GRAPH_GENERATION_TIMEOUT_SECONDS, LOG_THINKING } from './config.js';
+import { appendTaskProgressLog } from './providers/providerFileUtils.js';
+
+function reportTaskProgress(ctx: HandlerContext, taskId: string | undefined, agentId: string | undefined, taskFolderName: string | undefined, event: any): void {
+  if (!taskId || !agentId || !event) return;
+  const kind = event.kind === 'thinking_delta' ? 'thinking' : event.kind;
+  if (!['thinking', 'text_chunk', 'text_delta', 'tool_call', 'tool_result', 'file_written', 'run_status'].includes(kind)) return;
+  const text = typeof event.text === 'string' ? event.text : undefined;
+  const path = typeof event.path === 'string' ? event.path : undefined;
+  if (kind !== 'thinking' || LOG_THINKING) appendTaskProgressLog(taskFolderName, kind, text, path);
+  ctx.sendToSaas({ action: 'task_progress', taskId, agentId, kind, text: kind === 'thinking' && !LOG_THINKING ? undefined : text, path, timestamp: new Date().toISOString() });
+}
+
+function reportGraphGenerationProgress(ctx: HandlerContext, requestId: string | undefined, agentId: string | undefined, phase: string, sequence: number, message: string): void {
+  if (!requestId || !agentId) return;
+  ctx.sendToSaas({ action: 'graph_generation_progress', requestId, agentId, phase, sequence, message, timestamp: new Date().toISOString() });
+}
 
 /**
  * Main entry point for action-based intents from SaaS.
@@ -30,6 +47,54 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     parsedArgs = typeof args === 'string' && args.trim() ? JSON.parse(args) : (args ?? (content ? { message: content } : undefined));
   } catch {
     parsedArgs = args ?? (content ? { message: content } : undefined);
+  }
+
+  // ── generate_graph_blueprint: read-only structured planning ──────────────────
+  if (intentType === 'generate_graph_blueprint') {
+    reportGraphGenerationProgress(ctx, requestId, targetId, 'accepted', 1, 'Request received by Bridge.');
+    const prompt = parsedArgs?.prompt || content || '';
+    if (!prompt) {
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'MISSING_INTENT_PAYLOAD' });
+      return;
+    }
+    if (!ctx.provider.generateStructuredPlan) {
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, error: 'GRAPH_GENERATION_UNSUPPORTED_PROVIDER' });
+      return;
+    }
+
+    try {
+      logger.info('graph_generation.started', { agentId: targetId, provider: ctx.provider.providerName });
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'planning', 2, 'Planning workflow structure and instructions.');
+      const result = await ctx.provider.generateStructuredPlan({
+        agentId: targetId!,
+        prompt,
+        workingDir: agentInfo.workspace,
+        timeoutMs: GRAPH_GENERATION_TIMEOUT_SECONDS * 1_000,
+      });
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'completed', 3, 'Graph proposal is ready for validation.');
+      ctx.sendToSaas({ action: 'intent_result', requestId, agentId: targetId, intentType, providerMethod, executionId, contextTaskId, result });
+      logger.info('graph_generation.completed', { agentId: targetId, provider: ctx.provider.providerName, responseLength: result.length });
+    } catch (err: any) {
+      logger.warn('graph_generation.failed', { agentId: targetId, provider: ctx.provider.providerName, error: err?.message });
+      const errorMessage = err?.message || 'GRAPH_GENERATION_PROVIDER_ERROR';
+      if (/\b(?:401|oauth|auth(?:entication)?|token).*?(?:expired|invalid|required|fail)/i.test(errorMessage))
+        reportProviderHealth(agentInfo.provider ?? ctx.provider.providerName, { available: false, reason: 'auth_required' });
+      const errorCode = /\b(?:timed?\s*out|abort(?:ed)?)\b/i.test(errorMessage)
+        ? 'GRAPH_GENERATION_TIMEOUT'
+        : errorMessage;
+      reportGraphGenerationProgress(ctx, requestId, targetId, 'failed', 3, 'Graph generation could not be completed.');
+      ctx.sendToSaas({
+        action: 'intent_result',
+        requestId,
+        agentId: targetId,
+        intentType,
+        providerMethod,
+        executionId,
+        contextTaskId,
+        error: errorCode,
+      });
+    }
+    return;
   }
 
   logger.debug('intent.received', { agentId: targetId, intentType, providerMethod, executionId, contextTaskId, rawArgs: args });
@@ -70,6 +135,7 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
         },
         {
           onStream: (event) => {
+            reportTaskProgress(ctx, contextTaskId, targetId, taskFolderName, event);
             if (event?.type === 'assistant' || event?.type === 'tool_use' || event?.type === 'tool_result'
                 || event?.kind === 'text_chunk' || event?.kind === 'tool_call' || event?.kind === 'tool_result') {
               setAgentRunning(targetId!);
@@ -120,6 +186,11 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
   if (intentType === 'followup' || intentType === 'agent_command') {
     const message = parsedArgs?.message || content || '';
     const taskFolderName: string | undefined = parsedArgs?.taskFolderName;
+    const taskMode: string | undefined = parsedArgs?.taskMode;
+    const repoPath: string | undefined = parsedArgs?.repoPath;
+    const focusFiles: string[] = Array.isArray(parsedArgs?.focusFiles)
+      ? parsedArgs.focusFiles.filter((value: unknown): value is string => typeof value === 'string')
+      : [];
     setAgentRunning(targetId!);
 
     // Write followup input file and build output-file instruction for all providers.
@@ -132,7 +203,12 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     let augmentedMessage = message;
     if (intentType === 'followup' && (contextTaskId || taskFolderName)) {
       try {
-        const { followupLogBlock, followupLogBlockWithHistory } = prepareFollowupFiles(contextTaskId || '', message, taskFolderName);
+        const { followupLogBlock, followupLogBlockWithHistory } = prepareFollowupFiles(
+          contextTaskId || '',
+          message,
+          taskFolderName,
+          { taskMode, repoPath, focusFiles },
+        );
         const block = hasNativeSession ? followupLogBlock : followupLogBlockWithHistory;
         augmentedMessage = `<system>\n${block}\n</system>\n\n${message}`;
       } catch (e: any) {
@@ -151,9 +227,13 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
           intentType,
           executionId,
           taskFolderName,
+          taskMode,
+          repoPath,
+          focusFiles,
         },
         {
           onStream: (event) => {
+            reportTaskProgress(ctx, contextTaskId, targetId, taskFolderName, event);
             if (event?.type === 'assistant' || event?.type === 'tool_use' || event?.type === 'tool_result'
                 || event?.kind === 'text_chunk' || event?.kind === 'tool_call' || event?.kind === 'tool_result') {
               setAgentRunning(targetId!);

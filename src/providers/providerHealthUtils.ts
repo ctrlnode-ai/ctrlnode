@@ -8,10 +8,20 @@ import { execFile } from 'child_process';
  * Returns true if `binaryName` is reachable in PATH.
  * Runs `binaryName --version` with a 3-second timeout.
  * ENOENT (not installed) → false. Any other outcome (including non-zero exit) → true.
+ *
+ * On Windows, npm-installed CLIs (gemini, hermes, ...) are `.cmd`/`.ps1` shims, not `.exe`.
+ * `execFile` without a shell resolves only real executables via `CreateProcess`, so it reports
+ * ENOENT for a shim that works fine from any real shell — a false "not installed". Routing
+ * through `cmd.exe /c`, like `defaultCliRunner` already does for capability discovery, lets
+ * Windows' own PATHEXT resolution find the shim.
  */
 export function checkBinaryExists(binaryName: string): Promise<boolean> {
+  const isWindows = process.platform === 'win32';
+  const command = isWindows ? 'cmd.exe' : binaryName;
+  const args = isWindows ? ['/c', binaryName, '--version'] : ['--version'];
+
   return new Promise((resolve) => {
-    const proc = execFile(binaryName, ['--version'], { timeout: 3000 }, (err) => {
+    const proc = execFile(command, args, { timeout: 3000, windowsHide: true }, (err) => {
       if (!err || (err as NodeJS.ErrnoException).code !== 'ENOENT') {
         resolve(true);
       } else {

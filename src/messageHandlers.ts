@@ -9,6 +9,9 @@ import { HandlerContext } from './handlerContext.js';
 import { PROVIDERS } from './config.js';
 import {
   handleCreateWorkspace,
+  handleCreateFolder,
+  handleRenameFolder,
+  handleDeleteFolder,
   handleDeleteAgentConfig,
   handleDeleteAgentFolders,
   handleDeletePath,
@@ -21,10 +24,12 @@ import {
   handleCheckTaskOutput,
   handleActivatePipelineTask,
 } from './filesystemConfigHandlers.js';
+import { handleGitStatus, handleGitDiff, handleGitOperation } from './gitHandlers.js';
 import { handleIntentAction, handleInvokeTool } from './intentHandlers.js';
 import { applyManifestFromServer } from './modelManifest.js';
 import { handleCancelTask } from './cancelTaskHandler.js';
 import { handleInputResponse } from './inputResponseHandler.js';
+import { handleQueryProviderCapabilities } from './capabilitiesHandler.js';
 
 /** Actions that only make sense for the OpenClaw provider */
 const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'invoke_tool', 'init_ping']);
@@ -65,6 +70,24 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'create_workspace':
       handleCreateWorkspace(msg, ctx);
       break;
+    case 'create_folder':
+      handleCreateFolder(msg, ctx);
+      break;
+    case 'rename_folder':
+      handleRenameFolder(msg, ctx);
+      break;
+    case 'delete_folder':
+      handleDeleteFolder(msg, ctx);
+      break;
+    case 'git_status':
+      handleGitStatus(msg, ctx);
+      break;
+    case 'git_diff':
+      handleGitDiff(msg, ctx);
+      break;
+    case 'git_operation':
+      handleGitOperation(msg, ctx);
+      break;
     case 'sync_config':
       handleSyncConfig(msg, ctx);
       break;
@@ -83,6 +106,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'dispatch_task':
       await handleIntentAction(msg, ctx, 'dispatch_task');
       break;
+    case 'generate_graph_blueprint':
+      await handleIntentAction(msg, ctx, 'generate_graph_blueprint');
+      break;
     case 'agent_command':
       await handleIntentAction(msg, ctx, 'agent_command');
       break;
@@ -94,6 +120,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'invoke_tool':
       await handleInvokeTool(msg, ctx);
+      break;
+    case 'query_provider_capabilities':
+      await handleQueryProviderCapabilities(msg, ctx);
       break;
     case 'check_task_output':
       handleCheckTaskOutput(msg, ctx);
@@ -121,6 +150,12 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'sync_hermes_agents':
       handleSyncProviderAgents('hermes', msg, ctx);
+      break;
+    case 'sync_openrouter_agents':
+      handleSyncProviderAgents('openrouter', msg, ctx);
+      break;
+    case 'sync_ollama_agents':
+      handleSyncProviderAgents('ollama', msg, ctx);
       break;
     case 'cancel_task':
       await handleCancelTask(msg, ctx);

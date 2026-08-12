@@ -1,12 +1,15 @@
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import fs from 'fs';
+import { randomUUID } from 'crypto';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary, BridgeMessage } from '../types.js';
 import { buildAgentSummaries, discoveredAgents, isAgentInCtrlnode, normalizeAgentId } from '../agentDiscovery.js';
 import { resolveTargetAgentId } from '../agentRouting.js';
-import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT } from '../config.js';
-import { wipeAgentSessions } from '../fileSystem.js';
+import { OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_CONFIG, ctrlnodePath, CTRLNODE_ROOT, GRAPH_GENERATION_SESSION_POLL_MS } from '../config.js';
+import { wipeAgentSessions, deleteEphemeralSession } from '../fileSystem.js';
 import { getIntentProviderMethod } from '../intentDispatchPolicy.js';
 import { startMainSessionPolling, stopMainSessionPolling } from '../sessionHistoryPoller.js';
+import { readEphemeralPlanResult } from '../sessionLogParser.js';
 import { setTaskSubagentSession } from '../subagentSessions.js';
 import { logger } from '../logger.js';
 import { augmentPromptForRepoMode, isRepoTaskMode } from './repoDispatchContext.js';
@@ -16,6 +19,20 @@ type TaskTerminalStatus = 'failed' | 'blocked';
 function classifyTaskTerminalStatus(responseStatus: number, responseText: string): TaskTerminalStatus {
   if (responseStatus === 401 || /unauthorized/i.test(responseText)) return 'blocked';
   return 'failed';
+}
+
+/**
+ * The gateway has no allowedTools:[]-style restriction, so this instruction is
+ * the only thing keeping the ephemeral planning session read-only — it is a
+ * request, not an enforced constraint, unlike the SDK-based providers.
+ */
+function buildPlanningPrompt(userPrompt: string, planningId: string): string {
+  return `You are generating a read-only structured planning proposal. Do NOT create, write, or modify any files. Do NOT run shell commands or any tool that changes state. Only respond with the requested content below.
+
+${userPrompt}
+
+When you have finished, end your response with this exact tag on its own line and nothing after it:
+<TASK_COMPLETED:${planningId}>`;
 }
 
 export class OpenClawProvider implements IProvider {
@@ -108,6 +125,62 @@ export class OpenClawProvider implements IProvider {
     }
   }
 
+  /**
+   * Read-only structured planning over OpenClaw. Unlike the SDK-based providers,
+   * the gateway has no allowedTools:[]-style knob — the ephemeral session runs
+   * with the agent's normal toolset, so "read-only" here is a prompt instruction,
+   * not an enforced constraint. sessions_spawn also has no synchronous response
+   * (only a spawn ack), so the result must be polled from the session transcript
+   * OpenClaw writes to disk. The session is always deleted afterward — it is
+   * never the agent's main session and is never reused/resumed.
+   */
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    if (!agentInfo) throw new Error('AGENT_NOT_FOUND');
+
+    const planningId = randomUUID();
+    const sessionKey = `agent:${params.agentId}:subagent:${planningId}`;
+    const wrappedPrompt = buildPlanningPrompt(params.prompt, planningId);
+
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (OPENCLAW_GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
+    const url = `${OPENCLAW_GATEWAY_URL.replace(/\/$/, '')}/tools/invoke`;
+
+    logger.info('openclaw_provider.graph_generation_start', { agentId: params.agentId, planningId });
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          tool: 'sessions_spawn',
+          agentId: params.agentId,
+          args: { task: wrappedPrompt, message: wrappedPrompt },
+          sessionKey,
+        }),
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`HTTP_${response.status}: ${text.slice(0, 512)}`);
+      }
+
+      const toolResult = JSON.parse(text);
+      const spawnDetails = toolResult.result?.details as { status?: string; error?: string } | undefined;
+      if (spawnDetails?.status === 'error') {
+        throw new Error(spawnDetails.error?.trim() || 'GRAPH_GENERATION_PROVIDER_ERROR');
+      }
+
+      const result = await this._pollEphemeralPlan(params.agentId, planningId, params.timeoutMs);
+      logger.info('openclaw_provider.graph_generation_completed', { agentId: params.agentId, planningId, responseLength: result.length });
+      return result;
+    } catch (error: any) {
+      logger.warn('openclaw_provider.graph_generation_failed', { agentId: params.agentId, planningId, error: error?.message });
+      throw error;
+    } finally {
+      deleteEphemeralSession(params.agentId, sessionKey, OPENCLAW_CONFIG);
+    }
+  }
+
   async invokeTool(msg: BridgeMessage, sendToSaas: (payload: any) => void): Promise<void> {
     // Delegate to the existing handleInvokeTool logic via a minimal ctx-like adapter.
     // This is imported lazily to avoid circular deps at module load time.
@@ -141,6 +214,53 @@ export class OpenClawProvider implements IProvider {
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
+
+  /**
+   * Polls the ephemeral planning session's transcript on disk until the model
+   * emits its completion tag or `timeoutMs` elapses. sessions_spawn's HTTP
+   * response is only a spawn acknowledgement — OpenClaw writes the actual
+   * reply to the session's .jsonl asynchronously, same as dispatch_task.
+   */
+  private _pollEphemeralPlan(agentId: string, planningId: string, timeoutMs: number): Promise<string> {
+    const sessionsDir = path.join(path.dirname(OPENCLAW_CONFIG), 'agents', agentId, 'sessions');
+    const sessionsJsonPath = path.join(sessionsDir, 'sessions.json');
+    const deadline = Date.now() + timeoutMs;
+
+    return new Promise<string>((resolve, reject) => {
+      const tick = () => {
+        let index: Record<string, any> = {};
+        try {
+          if (fs.existsSync(sessionsJsonPath)) {
+            index = JSON.parse(fs.readFileSync(sessionsJsonPath, 'utf8'));
+          }
+        } catch {
+          // Transient read/parse race while OpenClaw is writing the file — retry.
+        }
+
+        const result = readEphemeralPlanResult(index, sessionsDir, agentId, planningId);
+
+        if (result.status === 'pending') {
+          if (Date.now() >= deadline) {
+            reject(new Error('GRAPH_GENERATION_TIMEOUT'));
+            return;
+          }
+          setTimeout(tick, GRAPH_GENERATION_SESSION_POLL_MS);
+          return;
+        }
+
+        if (result.status === 'done') {
+          const finalText = (result.text ?? '').trim();
+          if (!finalText) reject(new Error('GRAPH_GENERATION_EMPTY_RESPONSE'));
+          else resolve(finalText);
+          return;
+        }
+
+        // 'failed' or 'blocked' — the agent explicitly declined via the status tag.
+        reject(new Error(result.text?.trim() || `GRAPH_GENERATION_PROVIDER_ERROR: session ended as ${result.status}`));
+      };
+      tick();
+    });
+  }
 
   private async _invokeSessionsSpawn(opts: {
     agentId: string;

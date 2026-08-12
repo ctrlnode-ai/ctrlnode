@@ -11,7 +11,7 @@ import { Codex } from '@openai/codex-sdk';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -26,24 +26,102 @@ import {
   type RepoDispatchSpawnContext,
 } from './repoDispatchContext.js';
 import { discoveredAgents } from '../agentDiscovery.js';
-import { getCodexAgentHome } from '../filesystemConfigHandlers.js';
+import { getCodexAgentHome, resolveCodexHome, syncCodexAuthToAgentHome } from '../codexAgentHome.js';
 import { setAgentRunning } from '../websocket.js';
 import { detectStatusTag, writeTaskOutputs, fetchOpenAiCompatibleModels, createInactivityTimer } from './providerFileUtils.js';
+import { readCodexSubscriptionModels, resolveModelsWithSubscriptionFirst } from '../subscriptionModelResolution.js';
 
 /** Resolve `codex` binary from the system PATH (fallback when CODEX_BIN_PATH is not set). */
+export function chooseCodexExecutable(candidates: string[], platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform === 'win32') return candidates.find(c => c.toLowerCase().endsWith('.exe'));
+  return candidates[0] ?? undefined;
+}
+
+/** Build portable candidates for common npm, local-bin and VS Code installations. */
+export function buildKnownCodexCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const home = env.USERPROFILE || env.HOME || '';
+  const slash = (...parts: string[]) => parts.filter(Boolean).join('/').replace(/\/+/g, '/');
+  if (platform === 'win32') {
+    const appData = env.APPDATA || slash(home, 'AppData/Roaming');
+    return [
+      slash(appData, 'npm/codex.exe'),
+      slash(appData, 'npm/codex.cmd'),
+      slash(appData, 'npm/codex'),
+      slash(home, 'AppData/Local/bin/codex.exe'),
+      slash(home, '.vscode/extensions/openai.chatgpt/bin/windows-x86_64/codex.exe'),
+    ];
+  }
+
+  return [
+    '/usr/local/bin/codex',
+    '/usr/bin/codex',
+    slash(home, '.local/bin/codex'),
+    slash(home, '.npm-global/bin/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/linux-x86_64/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/macos-arm64/codex'),
+    slash(home, '.vscode/extensions/openai.chatgpt/bin/macos-x86_64/codex'),
+  ];
+}
+
+/**
+ * Resolve a Codex executable from a PATH lookup, optionally preserving a
+ * previously resolved path. The Bridge may run provider health checks after a
+ * child process changes its inherited PATH; a transient lookup failure must
+ * not turn an already-installed provider into "not installed".
+ */
+export function resolveCodexExecutableFromLookup(
+  lookup: () => string[],
+  platform: NodeJS.Platform = process.platform,
+  cachedPath?: string,
+): string | undefined {
+  return cachedPath ?? chooseCodexExecutable(lookup(), platform);
+}
+
+let resolvedCodexExecutable: string | undefined;
+
 function resolveCodexFromPath(): string | undefined {
+  if (resolvedCodexExecutable) return resolvedCodexExecutable;
+
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   const result = spawnSync(cmd, ['codex'], { encoding: 'utf8', timeout: 3000 });
-  if (result.status !== 0) return undefined;
-  const candidates = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
-  if (process.platform === 'win32') {
-    // Prefer .exe over .cmd — the SDK cannot spawn a .cmd wrapper directly
-    const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-    if (exe) return exe;
-    // No .exe found — .cmd wrappers don't work, skip
-    return undefined;
+  if (result.status === 0) {
+    const candidates = result.stdout.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    resolvedCodexExecutable = resolveCodexExecutableFromLookup(() => candidates);
   }
-  return candidates[0] ?? undefined;
+  if (!resolvedCodexExecutable) {
+    const knownCandidates = [
+      ...buildKnownCodexCandidates(),
+      ...resolveCodexFromVsCodeExtensions(),
+    ];
+    const existingCandidates = knownCandidates.filter(candidate => fs.existsSync(candidate));
+    resolvedCodexExecutable = chooseCodexExecutable(existingCandidates);
+  }
+  return resolvedCodexExecutable;
+}
+
+function resolveCodexFromVsCodeExtensions(): string[] {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  if (!home) return [];
+  const extensionsRoot = path.join(home, '.vscode', 'extensions');
+  try {
+    return fs.readdirSync(extensionsRoot)
+      .filter(entry => entry.toLowerCase().startsWith('openai.chatgpt'))
+      .map(entry => path.join(
+        extensionsRoot,
+        entry,
+        'bin',
+        process.platform === 'win32'
+          ? 'windows-x86_64/codex.exe'
+          : process.platform === 'darwin'
+            ? 'macos-arm64/codex'
+            : 'linux-x86_64/codex',
+      ));
+  } catch {
+    return [];
+  }
 }
 
 /** Fetch available model IDs from the OpenAI API using CODEX_API_KEY or OPENAI_API_KEY. */
@@ -51,6 +129,64 @@ async function fetchOpenAiModels(): Promise<string[]> {
   const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
   return fetchOpenAiCompatibleModels(apiKey ?? '');
 }
+
+const GRAPH_BLUEPRINT_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'description', 'topology', 'templateFamily', 'schedule', 'agentMode', 'agents', 'nodes'],
+  properties: {
+    name: { type: 'string' },
+    description: { type: 'string' },
+    topology: { type: 'string', enum: ['single', 'linear', 'fan_out_fan_in', 'dag'] },
+    templateFamily: { type: 'string', enum: ['blank', 'research_report', 'linear', 'parallel', 'custom'] },
+    schedule: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'time', 'days', 'hours', 'timezone', 'cron'],
+      properties: {
+        kind: { type: 'string', enum: ['manual', 'hourly', 'daily', 'weekdays', 'weekly', 'custom'] },
+        time: { type: ['string', 'null'] },
+        days: { type: ['array', 'null'], items: { type: 'integer' } },
+        hours: { type: ['array', 'null'], items: { type: 'integer' } },
+        timezone: { type: ['string', 'null'] },
+        cron: { type: ['string', 'null'] },
+      },
+    },
+    agentMode: { type: 'string', enum: ['single', 'multi'] },
+    agents: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'name', 'role', 'instructions'],
+        properties: {
+          key: { type: 'string' },
+          name: { type: 'string' },
+          role: { type: 'string' },
+          instructions: { type: 'string' },
+        },
+      },
+    },
+    nodes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'label', 'instructions', 'taskMode', 'focusFiles', 'outputFolder', 'dependsOn', 'agentKey'],
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          instructions: { type: 'string' },
+          taskMode: { type: 'string', enum: ['output', 'repo'] },
+          focusFiles: { type: 'array', items: { type: 'string' } },
+          outputFolder: { type: 'string' },
+          dependsOn: { type: 'array', items: { type: 'string' } },
+          agentKey: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} as const;
 
 export class CodexSdkProvider implements IProvider {
   readonly providerName = 'codex';
@@ -92,6 +228,71 @@ export class CodexSdkProvider implements IProvider {
     await this._run(params.taskId, params.message, callbacks, params.agentId, undefined, agentInfo?.description, agentInfo?.model);
   }
 
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const agentInfo = discoveredAgents[params.agentId];
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+    const agentHome = getCodexAgentHome(params.agentId);
+    const sharedCodexHome = resolveCodexHome();
+    syncCodexAuthToAgentHome(agentHome, sharedCodexHome);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : sharedCodexHome;
+    const modelFromConfig = codexHomeOverride ? readModelFromConfigToml(codexHomeOverride) : undefined;
+    const model = (agentInfo?.model && agentInfo.model !== this.providerName ? agentInfo.model : undefined)
+      ?? modelFromConfig
+      ?? process.env.CODEX_DEFAULT_MODEL
+      ?? undefined;
+    const codexEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      ...(process.env.CODEX_API_KEY ? { OPENAI_API_KEY: process.env.CODEX_API_KEY } : {}),
+      ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+    };
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), params.timeoutMs);
+
+    logger.info('codex_sdk.graph_generation_start', {
+      agentId: params.agentId,
+      cwd,
+      model: model ?? '(default)',
+      timeoutMs: params.timeoutMs,
+    });
+
+    try {
+      const codexBinPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
+      logger.info('codex_sdk.graph_generation_config', {
+        agentId: params.agentId,
+        codexBinPath: codexBinPath ?? '(not found on PATH)',
+      });
+      const codex = new Codex({
+        ...(codexBinPath ? { codexPathOverride: codexBinPath } : {}),
+        env: codexEnv,
+      });
+      const thread = codex.startThread({
+        workingDirectory: cwd,
+        skipGitRepoCheck: true,
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        ...(model ? { model } : {}),
+      });
+      const turn = await thread.run(params.prompt, {
+        outputSchema: GRAPH_BLUEPRINT_OUTPUT_SCHEMA,
+        signal: abortController.signal,
+      });
+      const result = turn.finalResponse.trim();
+      if (!result) throw new Error('GRAPH_GENERATION_EMPTY_RESPONSE');
+      logger.info('codex_sdk.graph_generation_completed', {
+        agentId: params.agentId,
+        responseLength: result.length,
+      });
+      return result;
+    } catch (error: any) {
+      if (abortController.signal.aborted || error?.name === 'AbortError') {
+        throw new Error('GRAPH_GENERATION_TIMEOUT');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
   }
@@ -116,12 +317,24 @@ export class CodexSdkProvider implements IProvider {
     return null;
   }
   async listModels(): Promise<string[]> {
-    return fetchOpenAiModels();
+    const codexHome = resolveCodexHome();
+    if (!codexHome) return [];
+    return resolveModelsWithSubscriptionFirst(
+      () => readCodexSubscriptionModels(codexHome),
+      fetchOpenAiModels,
+    );
   }
 
   async isAvailable(): Promise<boolean> {
-    const { checkBinaryExists } = await import('./providerHealthUtils.js');
-    return checkBinaryExists('codex');
+    const resolvedPath = process.env.CODEX_BIN_PATH || resolveCodexFromPath();
+    const health = {
+      available: Boolean(resolvedPath),
+      platform: process.platform,
+      resolvedPath: resolvedPath ?? '(not found)',
+    };
+    if (resolvedPath) logger.debug('codex_sdk.health_check', health);
+    else logger.warn('codex_sdk.health_check', health);
+    return Boolean(resolvedPath);
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
@@ -152,7 +365,9 @@ export class CodexSdkProvider implements IProvider {
     logger.info('codex_sdk.start', { taskId, cwd: spawnCwd, taskFolder, model: agentModel });
 
     const agentHome = getCodexAgentHome(agentId ?? '');
-    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : process.env.CODEX_HOME;
+    const sharedCodexHome = resolveCodexHome();
+    syncCodexAuthToAgentHome(agentHome, sharedCodexHome);
+    const codexHomeOverride = fs.existsSync(agentHome) ? agentHome : sharedCodexHome;
     if (codexHomeOverride) ensureWorkspaceTrusted(codexHomeOverride);
 
     // Report the configured model immediately so the UI shows it.

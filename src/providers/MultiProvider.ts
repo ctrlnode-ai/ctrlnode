@@ -11,9 +11,15 @@
  */
 
 import { logger } from '../logger.js';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { discoveredAgents, normalizeAgentId } from '../agentDiscovery.js';
+import {
+  DiscoverCapabilitiesParams,
+  ProviderCapabilities,
+  discoverStatelessCapabilities,
+  emptyCapabilities,
+} from './capabilities/index.js';
 
 export class MultiProvider implements IProvider {
   private readonly providers: IProvider[];
@@ -60,6 +66,14 @@ export class MultiProvider implements IProvider {
   async sendToSession(params: SendToSessionParams, callbacks: TaskCallbacks): Promise<void> {
     const owner = this.resolveOwner(params.agentId);
     return owner.sendToSession(params, callbacks);
+  }
+
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const owner = this.resolveOwner(params.agentId);
+    if (!owner.generateStructuredPlan) {
+      throw new Error('GRAPH_GENERATION_UNSUPPORTED_PROVIDER');
+    }
+    return owner.generateStructuredPlan(params);
   }
 
   // ── Tool invocation ───────────────────────────────────────────────────────────
@@ -177,17 +191,22 @@ export class MultiProvider implements IProvider {
    * Returns a map of providerName → boolean.
    * Providers that don't implement isAvailable() are assumed available (true).
    */
-  async checkAllProviders(): Promise<Record<string, boolean>> {
+  async checkAllProviders(): Promise<Record<string, ProviderHealth>> {
     const results = await Promise.allSettled(
       this.providers.map(async p => ({
         name: p.providerName,
-        available: p.isAvailable ? await p.isAvailable() : true,
+        health: p.checkHealth
+          ? await p.checkHealth()
+          : await (async () => {
+              const available = p.isAvailable ? await p.isAvailable() : true;
+              return available ? { available } : { available, reason: 'service_unreachable' as const };
+            })(),
       })),
     );
-    const health: Record<string, boolean> = {};
+    const health: Record<string, ProviderHealth> = {};
     for (const r of results) {
       if (r.status === 'fulfilled') {
-        health[r.value.name] = r.value.available;
+        health[r.value.name] = r.value.health;
       }
     }
     return health;
@@ -195,6 +214,31 @@ export class MultiProvider implements IProvider {
 
   async isAvailable(): Promise<boolean> {
     return true;
+  }
+
+  // ── Capability discovery ──────────────────────────────────────────────────────
+
+  /**
+   * Routes to the agent's owning provider so the catalogue reflects the provider that will
+   * actually run the task. An unknown or inactive agent yields an empty catalogue with a
+   * warning rather than throwing: the slash menu must degrade, never break the task form.
+   */
+  async discoverCapabilities(params: DiscoverCapabilitiesParams): Promise<ProviderCapabilities> {
+    let owner: IProvider;
+    try {
+      owner = this.resolveOwner(params.agentId ?? '');
+    } catch (e) {
+      logger.warn('multi_provider.capabilities_owner_unresolved', {
+        agentId: params.agentId,
+        err: String(e),
+      });
+      const unresolved = emptyCapabilities('unknown', params);
+      unresolved.discovery.warnings.push('agent_provider_unknown');
+      return unresolved;
+    }
+
+    if (owner.discoverCapabilities) return owner.discoverCapabilities(params);
+    return discoverStatelessCapabilities(owner.providerName, params);
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams } from './IProvider.js';
+import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import {
   TASK_TIMEOUT_MINUTES,
@@ -62,6 +62,12 @@ function ensureSqlite3NextToRunner(runnerDir: string): void {
   if (realSqlite3) {
     if (!fs.existsSync(path.join(pkgDir, 'build', 'Release', 'node_sqlite3.node'))) {
       _copySqlite3Package(realSqlite3, pkgDir);
+      // The real package's lib/sqlite3-binding.js does `require('bindings')(...)`, but only
+      // sqlite3 itself is copied here — the `bindings` package isn't, so that require fails
+      // with MODULE_NOT_FOUND at runtime. Overwrite with the embedded variant that requires
+      // the .node file by relative path directly, matching what _extractSqlite3Binding uses.
+      const bindingShim = SQLITE3_JS_FILES['lib/sqlite3-binding.js'];
+      if (bindingShim) fs.writeFileSync(path.join(pkgDir, 'lib', 'sqlite3-binding.js'), bindingShim, 'utf8');
       logger.info('cursor_sdk.sqlite3_copied', { from: realSqlite3 });
     }
     return;
@@ -149,6 +155,37 @@ export class CursorSdkProvider implements IProvider {
     await this._run(params.taskId, params.message, undefined, callbacks, undefined, params.agentId);
   }
 
+  async generateStructuredPlan(params: GenerateStructuredPlanParams): Promise<string> {
+    const apiKey = process.env.CURSOR_API_KEY ?? '';
+    if (!apiKey.trim()) {
+      throw new Error(CURSOR_MISSING_API_KEY_REASON);
+    }
+
+    const agentInfo = discoveredAgents[params.agentId];
+    const registeredModel = agentInfo?.model && agentInfo.model !== 'cursor' ? agentInfo.model : undefined;
+    const effectiveModel = registeredModel ?? 'composer-2';
+    const cwd = fs.existsSync(params.workingDir) ? params.workingDir : CTRLNODE_ROOT;
+
+    const { cmd: runnerCmd, args: runnerArgs } = getRunnerSpawnArgs();
+    logger.info('cursor_sdk.graph_generation_start', { agentId: params.agentId, cwd, model: effectiveModel });
+
+    try {
+      const result = await this._runPlan(runnerCmd, runnerArgs, cwd, {
+        command: 'plan',
+        prompt: params.prompt,
+        cwd,
+        model: effectiveModel,
+        apiKey,
+        timeoutMs: params.timeoutMs,
+      }, params.timeoutMs);
+      logger.info('cursor_sdk.graph_generation_completed', { agentId: params.agentId, responseLength: result.length });
+      return result;
+    } catch (error: any) {
+      logger.warn('cursor_sdk.graph_generation_failed', { agentId: params.agentId, error: error?.message });
+      throw error;
+    }
+  }
+
   async invokeTool(_msg: any, sendToSaas: (payload: any) => void): Promise<void> {
     sendToSaas({ action: 'tool_result', error: 'NOT_SUPPORTED_BY_PROVIDER' });
   }
@@ -211,6 +248,77 @@ export class CursorSdkProvider implements IProvider {
   }
 
   // ── Internal ────────────────────────────────────────────────────────────────
+
+  /**
+   * Sends a single { command: 'plan' } request to the runner and resolves with the
+   * runner's plan_result text. The runner creates an ephemeral Cursor Cloud Agent
+   * (no stable agentId) and deletes it right after, so no session persists —
+   * unlike _run(), which resumes/keeps a stable agent per Bridge agentId.
+   */
+  private _runPlan(
+    runnerCmd: string,
+    runnerArgs: string[],
+    cwd: string,
+    taskConfig: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn(runnerCmd, runnerArgs, {
+        cwd,
+        env: { ...process.env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+      });
+
+      if (!proc.stdin || !proc.stdout) {
+        reject(new Error('Failed to start cursor-sdk-runner process'));
+        return;
+      }
+
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (!proc.killed) proc.kill('SIGTERM');
+        fn();
+      };
+
+      const timer = setTimeout(() => {
+        logger.warn('cursor_sdk.graph_generation_timeout', { timeoutMs });
+        finish(() => reject(new Error('GRAPH_GENERATION_TIMEOUT')));
+      }, timeoutMs);
+
+      let stderr = '';
+      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('error', (err: Error) => finish(() => reject(err)));
+      proc.on('close', (code: number | null) => {
+        finish(() => reject(new Error(stderr.trim().slice(0, 512) || `cursor-sdk-runner exited with code ${code}`)));
+      });
+
+      (async () => {
+        const { createInterface } = await import('readline');
+        const rl = createInterface({ input: proc.stdout!, terminal: false });
+        for await (const line of rl) {
+          if (!line.trim()) continue;
+          let msg: any;
+          try { msg = JSON.parse(line); } catch { continue; }
+          if (msg.type === 'plan_result') {
+            const text = (typeof msg.text === 'string' ? msg.text : '').trim();
+            if (!text) finish(() => reject(new Error('GRAPH_GENERATION_EMPTY_RESPONSE')));
+            else finish(() => resolve(text));
+            return;
+          } else if (msg.type === 'plan_error') {
+            finish(() => reject(new Error(msg.error || 'GRAPH_GENERATION_PROVIDER_ERROR')));
+            return;
+          }
+        }
+      })();
+
+      proc.stdin.write(JSON.stringify(taskConfig) + '\n');
+      proc.stdin.end();
+    });
+  }
 
   private async _run(
     taskId: string,

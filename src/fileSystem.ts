@@ -84,6 +84,20 @@ export async function deleteDir(dirPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Returns true when `dirPath` exists and contains no entries.
+ * Non-existent paths are treated as empty (nothing to delete).
+ *
+ * @param dirPath - Absolute path of the directory to check.
+ */
+export function isDirEmpty(dirPath: string): boolean {
+  try {
+    return fs.readdirSync(dirPath).length === 0;
+  } catch {
+    return true;
+  }
+}
+
 // ── Safe file I/O ─────────────────────────────────────────────────────────────
 
 /**
@@ -360,6 +374,43 @@ export function wipeAgentSessions(agentId: string, openclawConfigPath: string): 
     fs.mkdirSync(sessionsDir, { recursive: true });
   }
   fs.writeFileSync(path.join(sessionsDir, 'sessions.json'), '{}', 'utf8');
+}
+
+/**
+ * Removes a single ephemeral session entry (by full sessionKey) from an agent's
+ * sessions.json plus its .jsonl transcript, leaving every other session (main,
+ * other subagents) untouched. Unlike {@link wipeAgentSessions} — which resets
+ * the whole registry — this is the surgical cleanup used after a read-only
+ * generateStructuredPlan call so the throwaway session it spawned does not
+ * clobber the agent's actual main session or linger indefinitely.
+ *
+ * Best-effort: never throws. A missing sessions.json or an already-removed key
+ * is a silent no-op.
+ *
+ * @param agentId            - The agent identifier (e.g. "compi").
+ * @param sessionKey         - Full session key, e.g. "agent:compi:subagent:<uuid>".
+ * @param openclawConfigPath - Absolute path to the openclaw.json file.
+ */
+export function deleteEphemeralSession(agentId: string, sessionKey: string, openclawConfigPath: string): void {
+  const sessionsDir = path.join(path.dirname(openclawConfigPath), 'agents', agentId, 'sessions');
+  const sessionsJsonPath = path.join(sessionsDir, 'sessions.json');
+
+  try {
+    if (!fs.existsSync(sessionsJsonPath)) return;
+
+    const index = JSON.parse(fs.readFileSync(sessionsJsonPath, 'utf8'));
+    const entry = index[sessionKey];
+    if (!entry) return;
+
+    delete index[sessionKey];
+    fs.writeFileSync(sessionsJsonPath, JSON.stringify(index), 'utf8');
+
+    const jsonlPath: string | undefined = entry.sessionFile
+      ?? (entry.sessionId ? path.join(sessionsDir, `${entry.sessionId}.jsonl`) : undefined);
+    if (jsonlPath) fs.rmSync(jsonlPath, { force: true });
+  } catch {
+    // Best-effort cleanup — a failure here must never mask the planning result.
+  }
 }
 
 // ── Volume detection ──────────────────────────────────────────────────────────

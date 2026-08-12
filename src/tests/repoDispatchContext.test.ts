@@ -5,6 +5,7 @@ import {
   buildTaskLogSystemBlock,
   isRepoTaskMode,
   resolveRepoDispatchSpawn,
+  resolveSessionFilePath,
   resolveTaskLogAbsolutePath,
 } from '../providers/repoDispatchContext';
 import { CTRLNODE_ROOT } from '../config';
@@ -52,5 +53,16 @@ describe('repoDispatchContext', () => {
     expect(once).toContain('hello');
     expect(once).toContain(buildTaskLogSystemBlock(params.taskLogRelativePath)!);
     expect(augmentPromptForRepoMode(once, params)).toBe(once);
+  });
+
+  it('resolves the session_id file inside the real nested task folder when taskFolderName is known', () => {
+    const file = resolveSessionFilePath('tasks/sche/08-04/08ee64fc-revisi-n-de-c-digo-run-1', '08ee64fc-397c-4ffa-a66d-fe9c8206dd82');
+    expect(file).toBe(path.join(CTRLNODE_ROOT, 'tasks/sche/08-04/08ee64fc-revisi-n-de-c-digo-run-1', 'session_id'));
+  });
+
+  it('falls back to the flat tasks/<taskId> folder only when taskFolderName is genuinely unavailable', () => {
+    const taskId = '550e8400-e29b-41d4-a716-446655440000';
+    const file = resolveSessionFilePath(undefined, taskId);
+    expect(file).toBe(path.join(CTRLNODE_ROOT, 'tasks', taskId, 'session_id'));
   });
 });

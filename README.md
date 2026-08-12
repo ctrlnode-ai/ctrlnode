@@ -6,171 +6,87 @@
   <img alt="CTRL NODE" src="assets/logo-dark.png" width="420">
 </picture>
 
-### Orchestrate AI coding agents — tasks, routines, and workflows — from anywhere.
+### Control and run AI agent graphs from anywhere.
 
 [![License: ELv2](https://img.shields.io/badge/License-Elastic_v2-007EC6?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.5-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
-[![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMEExMCAxMCAwIDAgMCAxMiAyeiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://ctrlnode.ai)
+[![Release](https://img.shields.io/badge/release-v2026.3.1-1aff8c?style=flat-square)](https://github.com/ctrlnode-ai/ctrlnode/releases)
+[![Website](https://img.shields.io/badge/ctrlnode.ai-0A0A23?style=flat-square)](https://ctrlnode.ai)
 
-[Website](https://ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases) · [Bridge setup](src/bridge/README.md)
+[Website](https://ctrlnode.ai) · [App](https://app.ctrlnode.ai) · [Releases](https://github.com/ctrlnode-ai/ctrlnode/releases)
 
 </div>
 
 ---
 
-**CTRL NODE** is a remote orchestration platform for AI coding agents. Install the Bridge binary on any machine — your laptop, a dev VPS, a CI box — and from [app.ctrlnode.ai](https://app.ctrlnode.ai) you can dispatch tasks, schedule recurring routines, and design multi-step workflows that trigger automatically, all without opening a single inbound port.
+**CTRL NODE is a control system for AI agent graphs.** Build a graph from agent, task, and control nodes; connect the paths they can take; then run and observe it from one place.
 
-Works with **Claude, Copilot, Gemini, Codex, Cursor, OpenClaw**, or any combination. Your code and workspaces **never leave your machine** — CTRL NODE only sees the output you explicitly stream back.
+Install the open-source Bridge on your laptop, server, or CI machine. It makes one outbound connection to CtrlNode, so your agents and workspaces stay on your machine—no inbound ports, VPN, or firewall changes.
 
 ---
 
-## What's new in v2.5
+## What changed in v2026.3.1
 
-- **Task cancellation** — cancel a running task from the UI at any time; Bridge signals the active provider immediately (SIGTERM for CLI/ACP processes, AbortController for the Claude SDK, cancel flag for Codex).
-- **User input delivery** — when an ACP agent hits a permission prompt it cannot auto-approve, it now notifies the UI with a `task_waiting_for_input` event instead of silently failing; Claude Code supports writing the response directly to stdin.
-- **Persistent session resume** — follow-up tasks dispatched to Claude Agent SDK agents now resume the original conversation session, even across Bridge restarts; the session ID is saved to disk and loaded automatically on the next follow-up.
-- **Follow-up files for all providers** — follow-up messages consistently write a numbered input file (`<id>-followup-N.md`) to the task's `input/` folder and inject an output-file instruction into the prompt; stateless providers (Codex, Hermes, Gemini, Copilot) also receive the prior `agent_log.md` as context.
+- **Git workspace support** — inspect repository status and diffs, and request guarded Git operations from the Bridge.
+- **Provider capabilities** — discover provider skills and capability catalogues in the task workflow.
+- **Friendlier terminal experience** — a startup welcome panel shows your workspace, config, provider, and version, with keyboard navigation for the trust prompt.  
+ 
+See the full [v2026.3.1 release notes](Releases/v2026.3.1/Release-notes-v2026.3.1.md).
 
 ---
 
 ## How it works
 
-```
-  You — anywhere on the internet
-  (browser, laptop, phone)
-          │
-          │  https://app.ctrlnode.ai
-          ▼
-    CTRL NODE control plane    ← hosted UI & orchestration
-      ├── Task & Kanban board
-      ├── Routines scheduler
-      ├── Workflow designer (trigger → steps → done)
-      └── Team, memory & activity dashboard
-          │
-          │  WebSocket (outbound from Bridge — no open ports needed)
-          ▼
-    Your machine / VPS
-      ├── CTRL NODE Bridge   ← lightweight binary you run (open source)
-      ├── Claude / Copilot / Gemini / Codex / Cursor / OpenClaw
-      └── Agent workspaces (files and outputs — stay local)
+```text
+  CtrlNode app
+       │
+       │  Build and run AI agent graphs
+       ▼
+  CtrlNode control plane
+       ├── Tasks and Kanban
+       ├── Routines
+       ├── Graph canvas
+       └── Team, files, and activity
+       │
+       │  Outbound WebSocket
+       ▼
+  Your machine or server
+       ├── CtrlNode Bridge
+       ├── Your AI providers
+       └── Your local workspaces and files
 ```
 
-The Bridge makes a single **outbound** WebSocket connection.  No inbound ports, no VPN, no firewall rules — it works behind NAT, inside Docker, on a headless server.
+The Bridge only connects out. Your code and workspaces never leave your machine unless an agent explicitly returns output to CtrlNode.
 
 ---
 
 ## Supported providers
 
-| Provider | Backend | Key env var |
+| Provider | Runs through | Setup |
 |---|---|---|
-| `claude` | Anthropic `@anthropic-ai/claude-agent-sdk` | `ANTHROPIC_API_KEY` |
-| `copilot` | GitHub Copilot (ACP protocol) | *(Copilot extension)* |
-| `gemini` | Google Gemini CLI (ACP protocol) | `GEMINI_API_KEY` |
-| `codex` | OpenAI `@openai/codex-sdk` | `CODEX_API_KEY` |
-| `cursor` | Cursor `@cursor/sdk` | `CURSOR_API_KEY` |
-| `hermes` | Hermes (ACP protocol) | *(Hermes CLI)* |
-| `openclaw` | OpenClaw HTTP gateway | `OPENCLAW_GATEWAY_TOKEN` |
+| `claude` | Claude Agent SDK / Claude Code | `ANTHROPIC_API_KEY` or subscription |
+| `copilot` | GitHub Copilot ACP | Copilot extension |
+| `gemini` | Gemini CLI ACP | `GEMINI_API_KEY` |
+| `codex` | OpenAI Codex SDK | `CODEX_API_KEY` |
+| `cursor` | Cursor SDK | `CURSOR_API_KEY` |
+| `hermes` | Hermes ACP | Hermes CLI |
+| `openclaw` | OpenClaw gateway | `OPENCLAW_GATEWAY_TOKEN` |
+| `openrouter` | OpenRouter API | `OPENROUTER_API_KEY` |
+| `ollama` | Local Ollama | Install Ollama and pull a model |
 
-All providers run from the same Bridge process automatically — no configuration needed.
-
----
-
-## Features
-
-- **Remote task launch** — write a task in the web UI, run it on your machine from anywhere; no SSH, no VPN, no open ports
-- **Routines** — schedule recurring agent tasks (cron-style); runs are tracked and streamed like any manual task
-- **Multi-agent Workflows** — visual workflow designer; wire steps together, set a time or event trigger, deploy in one click
-- **Live output stream** — watch the agent work line by line from your browser in real time
-- **Outbound-only Bridge** — single lightweight binary, one outbound WebSocket; NAT, Docker, and headless VPS all work out of the box
-- **Multi-provider** — Claude, Copilot, Gemini, Codex, Cursor, OpenClaw from one Bridge process; mix providers across steps
-- **Model selection** — pick the exact model per agent; Bridge reports available models on connect
-- **Kanban workflow** — BACKLOG → INBOX → ACTIVE → DONE with real-time agent feedback
-- **Team & dashboard** — operators, roles, live activity and fleet overview
-- **Memory** — persistent knowledge attached to each project, accessible to agents
-- **Zero-storage by design** — workspaces stay on your side; CTRL NODE only sees what you stream explicitly
+Use more than one provider in the same graph.
 
 ---
 
-## Get started in 3 steps
+## Ai Agents Graphs
 
-### 1 — Sign up
+![AI agent graph canvas](assets/graph-ai-agents-execution.png)
 
-Create an account at [ctrlnode.ai](https://ctrlnode.ai). You'll get a **Pairing Token** from Settings → Bridge.
+A **Graph** is the visual execution model in CtrlNode. Add agent nodes, connect their paths, choose a trigger, and deploy. Each node can use the provider and model that fits its job.
 
----
-
-### 2 — Install the Bridge
-
-**Linux / macOS** — one-liner (detects platform and CPU automatically):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.sh | sh
-```
-
-**Windows (PowerShell)**:
-
-```powershell
-irm https://raw.githubusercontent.com/ctrlnode-ai/ctrlnode/main/install.ps1 | iex
-```
-
-Installs to `/usr/local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\Programs\ctrlnode` (Windows, added to PATH).
-
-<details>
-<summary>Manual download</summary>
-
-| Platform | Binary |
-|---|---|
-| Linux x64 (modern CPUs, AVX2) | `ctrlnode-linux-x64` |
-| Linux x64 (older CPUs / cloud VMs) | `ctrlnode-linux-x64-baseline` |
-| macOS Apple Silicon | `ctrlnode-darwin-arm64` |
-| Windows x64 | `ctrlnode.exe` |
-
-→ [Download from Releases](https://github.com/ctrlnode-ai/ctrlnode/releases)
-
-Not sure which Linux binary? Run `grep -o "avx[^ ]*" /proc/cpuinfo | head -1` — `avx2` → standard, anything else → `-baseline`.
-
-</details>
-
----
-
-### 3 — Run it
-
-First run — launches the setup wizard:
-
-```
-$ ctrlnode --setup
-
-Where is your workspace? [/home/user]: /home/user/code
-Pairing token: xxxxxxxxxx
-
-Config saved to: /home/user/code/.ctrlnode/.env
-Run ctrlnode to start the bridge.
-```
-
-Then start the Bridge:
-
-```
-$ ctrlnode
-Reading config from: /home/user/code/.ctrlnode/.env
-...connected
-```
-
-On subsequent runs the Bridge reads the saved config automatically. Run `ctrlnode --setup` again to change workspace or pairing token.
-
-Your agents appear in the web UI automatically. Create a task, assign it, and watch it run live from your browser.
-
----
-
-## Multi-agent Workflows — visual automation
-
-![Multi-agent Workflows canvas](assets/workflows.png)
-
-Design a workflow in the drag-and-drop canvas: drop agent nodes, wire the output of one step into the input of the next, set a **trigger** (schedule or event), and deploy. Each step runs on whichever agent and provider you choose — Claude for one step, Codex for the next.
-
-- Branching and fan-out
-- Cross-provider chains
-- Time triggers and event triggers
-- Live output stream per step
+- Branch and fan out work
+- Mix providers in one graph
+- Start from a schedule or event
+- Follow every node's activity live
 
 ---
 
@@ -182,39 +98,59 @@ Write a task, assign an agent, and drop it on the board. CTRL NODE automatically
 
 ---
 
-## Routines — recurring scheduled tasks
+## Also included
 
-![Routines calendar view](assets/routines.png)
-
-Create a Routine to run a task on a repeating schedule (daily summary, nightly refactor, weekly report…). The agent receives the task exactly as if you sent it manually — same live stream, same output artifacts, same status tracking.
+- **Routines** — schedule recurring agent work.
+- **Live activity** — watch output as each agent runs.
+- **Files and memory** — give agents the local context they need.
 
 ---
 
-## What's in this repository
+## Get started
+
+### 1. Install the Bridge
+
+**Linux / macOS**
+
+```bash
+curl -fsSL https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.sh | bash
+```
+
+**Windows PowerShell**
+
+```powershell
+irm https://github.com/ctrlnode-ai/ctrlnode/releases/latest/download/install.ps1 | iex
+```
+
+Or [download a binary from Releases](https://github.com/ctrlnode-ai/ctrlnode/releases).
+
+### 2. Sign in
+
+```bash
+ctrlnode login
+```
+
+Approve the code in your browser. Bridge stores the pairing token in its `.env` file.
+
+### 3. Start the Bridge
+
+```bash
+ctrlnode
+```
+
+Your agents appear in the app. Create a task or graph and run it on your machine.
+
+---
+
+## Repository
 
 | Component | Path |
 |---|---|
-| **Bridge source** (open source) | [`src/`](src/) |
+| **Bridge source** | [`src/`](src/) |
 | **Provider guides** | [`doc/`](doc/) |
 | **Release notes** | [`Releases/`](Releases/) |
 
----
-
-## Provider guides
-
-- [doc/claude-sdk.md](doc/claude-sdk.md) — Anthropic Claude (SDK + CLI)
-- [doc/copilot.md](doc/copilot.md) — GitHub Copilot (ACP)
-- [doc/gemini.md](doc/gemini.md) — Google Gemini CLI (ACP)
-- [doc/codex.md](doc/codex.md) — OpenAI Codex SDK
-- [doc/cursor.md](doc/cursor.md) — Cursor SDK
-- [doc/hermes.md](doc/hermes.md) — Hermes (ACP)
-- [doc/openclaw.md](doc/openclaw.md) — OpenClaw runtime
-
----
-
 ## Contributing
-
-PRs are welcome. For major changes, open an issue first.
 
 ```bash
 git clone https://github.com/ctrlnode-ai/ctrlnode.git
@@ -223,17 +159,9 @@ bun install
 bun dev
 ```
 
----
-
 ## License
 
-Licensed under the **[Elastic License 2.0](LICENSE)** (ELv2).
-
-- ✅ Use freely on your own machines
-- ✅ Modify and redistribute
-- ❌ Cannot be offered as a managed/hosted service to third parties
-
----
+Licensed under the [Elastic License 2.0](LICENSE) (ELv2).
 
 <div align="center">
 

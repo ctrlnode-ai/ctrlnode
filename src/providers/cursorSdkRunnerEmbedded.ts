@@ -164753,6 +164753,8 @@ if (msg.command === "discover") {
   await runDiscover(msg);
 } else if (msg.command === "delete") {
   await runDelete(msg);
+} else if (msg.command === "plan") {
+  await runPlan(msg);
 } else {
   await runTask(msg);
 }
@@ -164782,6 +164784,81 @@ async function runDelete({ agentId, apiKey }) {
     process.stderr.write(\`cursor-sdk-runner delete error: \${err?.message ?? err}
 \`);
     emit({ type: "delete_result", agentId, success: false, error: err?.message ?? String(err) });
+  }
+}
+async function runPlan({ prompt, cwd, model, apiKey, timeoutMs }) {
+  if (!(apiKey ?? process.env.CURSOR_API_KEY ?? "").trim()) {
+    emit({
+      type: "plan_error",
+      code: "unauthenticated",
+      error: "Missing CURSOR_API_KEY. Add your Cursor API key to the Bridge .env file and restart Bridge."
+    });
+    process.exitCode = 1;
+    return;
+  }
+  const modelSelection = { id: model ?? "composer-2" };
+  let agent;
+  try {
+    agent = await Agent.create({ apiKey, model: modelSelection, local: { cwd } });
+  } catch (err) {
+    const formatted = formatTaskError(err);
+    emit({ type: "plan_error", error: formatted.error, code: formatted.code });
+    process.exitCode = 1;
+    return;
+  }
+  let activeRun = null;
+  let cancelTimer = null;
+  if (timeoutMs && timeoutMs > 0) {
+    cancelTimer = setTimeout(async () => {
+      if (activeRun) {
+        try {
+          await activeRun.cancel();
+        } catch {}
+      }
+    }, timeoutMs);
+  }
+  let accumulatedText = "";
+  try {
+    const run = await agent.send(prompt, {
+      onDelta: ({ update: update2 }) => {
+        if (update2?.type === "text-delta" && typeof update2.text === "string") {
+          accumulatedText += update2.text;
+        }
+      }
+    });
+    activeRun = run;
+    for await (const event of run.stream()) {
+      if (event.type === "status" && event.status === "CANCELLED") {
+        if (cancelTimer)
+          clearTimeout(cancelTimer);
+        emit({ type: "plan_error", error: \`Cursor planning cancelled\${event.message ? ": " + event.message : ""}\` });
+        process.exitCode = 1;
+        return;
+      }
+    }
+    if (cancelTimer)
+      clearTimeout(cancelTimer);
+    const result = await run.wait();
+    const text = (accumulatedText || result.result || "").trim();
+    if (!text) {
+      emit({ type: "plan_error", error: "Cursor returned an empty planning response" });
+      process.exitCode = 1;
+    } else {
+      emit({ type: "plan_result", text });
+    }
+  } catch (err) {
+    if (cancelTimer)
+      clearTimeout(cancelTimer);
+    const formatted = formatTaskError(err);
+    emit({ type: "plan_error", error: formatted.error, code: formatted.code });
+    process.exitCode = 1;
+  } finally {
+    try {
+      await agent[Symbol.asyncDispose]();
+    } catch {}
+    try {
+      await Agent.delete(agent.agentId, { apiKey });
+    } catch {}
   }
 }
 async function runTask({ taskId, agentId, agentName, prompt, cwd, model, apiKey, timeoutMs }) {
