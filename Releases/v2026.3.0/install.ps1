@@ -12,7 +12,6 @@ param(
 $ErrorActionPreference = "Stop"
 $REPO        = "ctrlnode-ai/ctrlnode"
 $BINARY_NAME = "ctrlnode.exe"
-$DEFAULT_WORKSPACE = $env:USERPROFILE
 
 Write-Host ""
 Write-Host "CtrlNode Bridge Installer" -ForegroundColor Cyan
@@ -20,18 +19,6 @@ Write-Host "--------------------------" -ForegroundColor Cyan
 Write-Host ""
 
 # --- workspace directory ---
-Write-Host "Where is your workspace?"
-Write-Host "This is the root folder where ctrlnode will read and write files." -ForegroundColor DarkGray
-Write-Host "For security, the bridge cannot access anything outside this folder." -ForegroundColor DarkGray
-Write-Host "If you are a developer, point this to your source code root (e.g. C:\Code)." -ForegroundColor DarkGray
-$workspaceAnswer = Read-Host "Workspace [$DEFAULT_WORKSPACE]"
-$WorkspaceRoot = if ($workspaceAnswer.Trim()) { $workspaceAnswer.Trim() } else { $DEFAULT_WORKSPACE }
-Write-Host "  Workspace: $WorkspaceRoot" -ForegroundColor Gray
-Write-Host "  Tip: to change it later, set the BASE_PATH environment variable and restart ctrlnode." -ForegroundColor DarkGray
-Write-Host ""
-
-[System.Environment]::SetEnvironmentVariable('BASE_PATH', $WorkspaceRoot, 'User')
-
 # --- fetch latest release from GitHub ---
 Write-Host "Fetching latest release..."
 $releaseInfo = Invoke-RestMethod "https://api.github.com/repos/$REPO/releases/latest"
@@ -82,7 +69,6 @@ Write-Host ""
 Write-Host "Next: start the Bridge:" -ForegroundColor Cyan
 Write-Host "  ctrlnode"
 Write-Host ""
-Write-Host "Workspace: $WorkspaceRoot"
 Write-Host "When you run the Bridge for the first time, run 'ctrlnode login' to authorize it in your browser."
 Write-Host "Full setup (login + API keys):  ctrlnode --setup"
 Write-Host ""
@@ -91,6 +77,5 @@ Write-Host ""
 $runNow = Read-Host "Do you want to run ctrlnode now? (Y/n)"
 if ($runNow.Trim().ToLower() -ne 'n') {
   Write-Host "Starting ctrlnode..." -ForegroundColor Cyan
-  $env:BASE_PATH = $WorkspaceRoot
   & $dest
 }

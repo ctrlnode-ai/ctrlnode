@@ -24,10 +24,12 @@ import {
   handleCheckTaskOutput,
   handleActivatePipelineTask,
 } from './filesystemConfigHandlers.js';
+import { handleGitStatus, handleGitDiff, handleGitOperation } from './gitHandlers.js';
 import { handleIntentAction, handleInvokeTool } from './intentHandlers.js';
 import { applyManifestFromServer } from './modelManifest.js';
 import { handleCancelTask } from './cancelTaskHandler.js';
 import { handleInputResponse } from './inputResponseHandler.js';
+import { handleQueryProviderCapabilities } from './capabilitiesHandler.js';
 
 /** Actions that only make sense for the OpenClaw provider */
 const OPENCLAW_ONLY_ACTIONS = new Set(['sync_config', 'invoke_tool', 'init_ping']);
@@ -77,6 +79,15 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
     case 'delete_folder':
       handleDeleteFolder(msg, ctx);
       break;
+    case 'git_status':
+      handleGitStatus(msg, ctx);
+      break;
+    case 'git_diff':
+      handleGitDiff(msg, ctx);
+      break;
+    case 'git_operation':
+      handleGitOperation(msg, ctx);
+      break;
     case 'sync_config':
       handleSyncConfig(msg, ctx);
       break;
@@ -109,6 +120,9 @@ export async function handleMessage(raw: { toString(): string }, ctx: HandlerCon
       break;
     case 'invoke_tool':
       await handleInvokeTool(msg, ctx);
+      break;
+    case 'query_provider_capabilities':
+      await handleQueryProviderCapabilities(msg, ctx);
       break;
     case 'check_task_output':
       handleCheckTaskOutput(msg, ctx);

@@ -1,4 +1,5 @@
 import { AgentSummary } from '../types.js';
+import type { DiscoverCapabilitiesParams, ProviderCapabilities } from './capabilities/types.js';
 
 export interface DispatchTaskParams {
   agentId: string;
@@ -37,6 +38,10 @@ export interface SendToSessionParams {
   executionId?: string;
   /** CtrlNode-relative folder for the task (e.g. tasks/proyecto/06-25/uuid-slug). Bridge uses it to number followup files. */
   taskFolderName?: string;
+  /** Original task execution context, preserved for follow-up prompts. */
+  taskMode?: string;
+  repoPath?: string;
+  focusFiles?: string[];
 }
 
 export interface GenerateStructuredPlanParams {
@@ -104,4 +109,13 @@ export interface IProvider {
   isAvailable?(): Promise<boolean>;
   /** Rich live health used by Bridge status reporting. */
   checkHealth?(): Promise<ProviderHealth>;
+
+  /**
+   * Optional: read-only catalogue of user-invocable skills for the task INSTRUCTIONS slash menu.
+   *
+   * Must never execute skill content, start MCP servers, or return secrets — see
+   * capabilities/types.ts. Providers without an implementation fall back to the stateless
+   * adapter registry, and then to an empty `unsupported` catalogue.
+   */
+  discoverCapabilities?(params: DiscoverCapabilitiesParams): Promise<ProviderCapabilities>;
 }

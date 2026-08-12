@@ -20,6 +20,8 @@ import path from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
+import { discoverClaudeCapabilities } from './capabilities/claudeCapabilities.js';
+import type { DiscoverCapabilitiesParams, ProviderCapabilities } from './capabilities/types.js';
 import { AgentSummary } from '../types.js';
 import {
   CTRLNODE_ROOT,
@@ -376,6 +378,24 @@ export class ClaudeAgentSdkProvider implements IProvider {
     return fs.existsSync(credentialsPath)
       ? { available: true }
       : { available: false, reason: 'auth_required' };
+  }
+
+  /**
+   * Reads the real skill catalogue from the SDK, using the same cwd the task will run from
+   * so OUTPUT mode never advertises project skills it cannot see.
+   */
+  async discoverCapabilities(params: DiscoverCapabilitiesParams): Promise<ProviderCapabilities> {
+    return discoverClaudeCapabilities(params, (p) => {
+      const cwd = fs.existsSync(p.workingDirectory) ? p.workingDirectory : CTRLNODE_ROOT;
+      return {
+        cwd,
+        // Discovery only reads the command list — no turn is ever run.
+        allowedTools: [],
+        permissionMode: 'dontAsk' as any,
+        persistSession: false,
+        ...(CLAUDE_SDK_EXECUTABLE ? { pathToClaudeCodeExecutable: CLAUDE_SDK_EXECUTABLE } : {}),
+      };
+    });
   }
 
   // ── Internal ───────────────────────────────────────────────────────────────

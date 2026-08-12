@@ -14,6 +14,12 @@ import { logger } from '../logger.js';
 import { IProvider, DispatchTaskParams, TaskCallbacks, SendToSessionParams, GenerateStructuredPlanParams, ProviderHealth } from './IProvider.js';
 import { AgentSummary } from '../types.js';
 import { discoveredAgents, normalizeAgentId } from '../agentDiscovery.js';
+import {
+  DiscoverCapabilitiesParams,
+  ProviderCapabilities,
+  discoverStatelessCapabilities,
+  emptyCapabilities,
+} from './capabilities/index.js';
 
 export class MultiProvider implements IProvider {
   private readonly providers: IProvider[];
@@ -208,6 +214,31 @@ export class MultiProvider implements IProvider {
 
   async isAvailable(): Promise<boolean> {
     return true;
+  }
+
+  // ── Capability discovery ──────────────────────────────────────────────────────
+
+  /**
+   * Routes to the agent's owning provider so the catalogue reflects the provider that will
+   * actually run the task. An unknown or inactive agent yields an empty catalogue with a
+   * warning rather than throwing: the slash menu must degrade, never break the task form.
+   */
+  async discoverCapabilities(params: DiscoverCapabilitiesParams): Promise<ProviderCapabilities> {
+    let owner: IProvider;
+    try {
+      owner = this.resolveOwner(params.agentId ?? '');
+    } catch (e) {
+      logger.warn('multi_provider.capabilities_owner_unresolved', {
+        agentId: params.agentId,
+        err: String(e),
+      });
+      const unresolved = emptyCapabilities('unknown', params);
+      unresolved.discovery.warnings.push('agent_provider_unknown');
+      return unresolved;
+    }
+
+    if (owner.discoverCapabilities) return owner.discoverCapabilities(params);
+    return discoverStatelessCapabilities(owner.providerName, params);
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────────

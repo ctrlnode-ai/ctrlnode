@@ -10,11 +10,11 @@
  * machine as the one running `ctrlnode login`.
  */
 import os from 'os';
-import path from 'path';
+import fs from 'fs';
 import { execFile } from 'child_process';
-import { apiBaseUrl } from './modelManifest.js';
 import { mergeEnvFile } from './setupEnv.js';
-import { BRIDGE_VERSION } from './config.js';
+import { BRIDGE_VERSION } from './bridgeVersion.js';
+import { canonicalBridgeEnvPath } from './workspaceTrust.js';
 
 interface DeviceCodeResponse {
   deviceCode: string;
@@ -26,6 +26,20 @@ interface DeviceCodeResponse {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function apiBaseUrl(envFile: string): string {
+  let saasUrl = process.env.SAAS_URL;
+  if (!saasUrl && fs.existsSync(envFile)) {
+    const line = fs.readFileSync(envFile, 'utf8')
+      .split(/\r?\n/)
+      .find(value => value.trim().startsWith('SAAS_URL='));
+    saasUrl = line?.slice(line.indexOf('=') + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return (saasUrl || 'wss://api.ctrlnode.ai/ws/bridge')
+    .replace(/^wss:\/\//, 'https://')
+    .replace(/^ws:\/\//, 'http://')
+    .replace(/\/ws\/bridge$/, '');
 }
 
 /** Best-effort browser open — silently does nothing on headless machines (no error surfaced). */
@@ -98,7 +112,7 @@ async function pollForToken(apiBase: string, deviceCode: string, expiresInSecond
  * Returns the pairing token once written (or throws on failure/timeout/rejection).
  */
 export async function runLogin(envFile: string): Promise<string> {
-  const apiBase = apiBaseUrl();
+  const apiBase = apiBaseUrl(envFile);
 
   console.log('\nRequesting a login code...\n');
   const { deviceCode, userCode, verificationUri, expiresInSeconds, pollIntervalSeconds } = await requestDeviceCode(apiBase);
@@ -126,7 +140,7 @@ export async function runLogin(envFile: string): Promise<string> {
   return pairingToken;
 }
 
-/** Resolves the same .env path config.ts uses, for use before config.ts has loaded. */
+/** Resolves the canonical user .env path without loading config.ts. */
 export function defaultEnvFilePath(): string {
-  return path.join(process.env.BASE_PATH || os.homedir(), '.ctrlnode', '.env');
+  return canonicalBridgeEnvPath();
 }

@@ -186,6 +186,11 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
   if (intentType === 'followup' || intentType === 'agent_command') {
     const message = parsedArgs?.message || content || '';
     const taskFolderName: string | undefined = parsedArgs?.taskFolderName;
+    const taskMode: string | undefined = parsedArgs?.taskMode;
+    const repoPath: string | undefined = parsedArgs?.repoPath;
+    const focusFiles: string[] = Array.isArray(parsedArgs?.focusFiles)
+      ? parsedArgs.focusFiles.filter((value: unknown): value is string => typeof value === 'string')
+      : [];
     setAgentRunning(targetId!);
 
     // Write followup input file and build output-file instruction for all providers.
@@ -198,7 +203,12 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
     let augmentedMessage = message;
     if (intentType === 'followup' && (contextTaskId || taskFolderName)) {
       try {
-        const { followupLogBlock, followupLogBlockWithHistory } = prepareFollowupFiles(contextTaskId || '', message, taskFolderName);
+        const { followupLogBlock, followupLogBlockWithHistory } = prepareFollowupFiles(
+          contextTaskId || '',
+          message,
+          taskFolderName,
+          { taskMode, repoPath, focusFiles },
+        );
         const block = hasNativeSession ? followupLogBlock : followupLogBlockWithHistory;
         augmentedMessage = `<system>\n${block}\n</system>\n\n${message}`;
       } catch (e: any) {
@@ -217,6 +227,9 @@ export async function handleIntentAction(msg: BridgeMessage, ctx: HandlerContext
           intentType,
           executionId,
           taskFolderName,
+          taskMode,
+          repoPath,
+          focusFiles,
         },
         {
           onStream: (event) => {
